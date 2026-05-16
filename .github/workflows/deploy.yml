@@ -15,8 +15,8 @@ jobs:
     steps:
       - name: Trigger Render deploy hook
         run: |
-          curl -s -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" | \
-            python3 -c "import sys,json; d=json.load(sys.stdin); print('Deploy triggered:', d.get('id','unknown'))"
+          response=$(curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
+          echo "Render response: $response"
 
   # ──────────────────────────────────────────────────────
   # JOB 2: Deploy frontend to Vercel (unchanged)
