@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 
 from supabase_config import get_supabase, merge_user_doc
@@ -533,7 +533,11 @@ def lookup_patient_by_health_id(health_id: str, requester: dict = Depends(get_au
 # ─── 3-Layer Security OTP ─────────────────────────────────────────────────────
 
 @router.post("/patient/generate-otp")
-def generate_patient_otp(req: OTPGenerateRequest):
+def generate_patient_otp(req: OTPGenerateRequest, background_tasks: BackgroundTasks):
+    """
+    Generate an OTP, store it, return immediately, and dispatch SMS + email in the background.
+    Twilio/SMTP can take 5-30s; we don't make the frontend wait for them.
+    """
     supabase = get_supabase()
     try:
         otp_code   = str(random.randint(100000, 999999))
@@ -554,9 +558,9 @@ def generate_patient_otp(req: OTPGenerateRequest):
             phone      = normalize_phone(row.get("phone_number") or data.get("phoneNumber", ""))
             user_email = row.get("email") or data.get("email")
             if phone and len(phone) >= 10:
-                send_sms(phone, f"Your MedAxis AI OTP is: {otp_code}. Valid for 5 minutes.")
+                background_tasks.add_task(send_sms, phone, f"Your MedAxis AI OTP is: {otp_code}. Valid for 5 minutes.")
             if user_email:
-                send_email_otp(user_email, otp_code)
+                background_tasks.add_task(send_email_otp, user_email, otp_code)
 
         return {"message": "OTP generated and sent successfully."}
     except Exception as exc:

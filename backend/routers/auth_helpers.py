@@ -22,14 +22,41 @@ security = HTTPBearer()
 
 # ─── JWT Helpers ──────────────────────────────────────────────────────────────
 
+_jwks_client: "jwt.PyJWKClient | None" = None
+
+
+def _get_jwks_client() -> "jwt.PyJWKClient":
+    """Cached JWKS client for Supabase ES256 user-session tokens."""
+    global _jwks_client
+    if _jwks_client is None:
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        if not base:
+            raise HTTPException(status_code=500, detail="SUPABASE_URL not set")
+        _jwks_client = jwt.PyJWKClient(f"{base}/auth/v1/.well-known/jwks.json", cache_keys=True)
+    return _jwks_client
+
+
 def _decode_token(token: str) -> dict:
-    """Verify and decode a Supabase JWT using the project JWT secret."""
-    secret = os.getenv("SUPABASE_JWT_SECRET")
-    if not secret:
-        raise HTTPException(status_code=500, detail="Server misconfiguration: SUPABASE_JWT_SECRET not set")
+    """
+    Verify a Supabase JWT. Tries ES256 (modern user-session tokens via JWKS) first;
+    falls back to HS256 with SUPABASE_JWT_SECRET (our phone-OTP minted tokens).
+    """
+    # Detect algorithm from the unverified header
     try:
-        payload = jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated")
-        return payload
+        header = jwt.get_unverified_header(token)
+        alg    = header.get("alg", "HS256")
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"Malformed token: {exc}")
+
+    try:
+        if alg == "ES256":
+            signing_key = _get_jwks_client().get_signing_key_from_jwt(token).key
+            return jwt.decode(token, signing_key, algorithms=["ES256"], audience="authenticated")
+        # HS256 fallback (phone-OTP session tokens we mint ourselves)
+        secret = os.getenv("SUPABASE_JWT_SECRET")
+        if not secret:
+            raise HTTPException(status_code=500, detail="SUPABASE_JWT_SECRET not set")
+        return jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated")
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired. Please log in again.")
     except jwt.InvalidTokenError as exc:
@@ -101,7 +128,11 @@ def send_sms(to_number: str, message: str):
     try:
         if len(to_number) == 10:
             to_number = f"+91{to_number}"
-        client = Client(account_sid, auth_token)
+        client = Client(account_sid, auth_token, http_client=None)
+        # Twilio's default HTTP client has no timeout — set one so a stuck
+        # connection can't hang the worker indefinitely.
+        from twilio.http.http_client import TwilioHttpClient
+        client.http_client = TwilioHttpClient(timeout=10)
         msg = client.messages.create(body=message, from_=from_number, to=to_number)
         print(f"DEBUG: Twilio SMS sent. SID: {msg.sid}")
         return True
@@ -145,7 +176,7 @@ def send_email_otp(to_email: str, otp_code: str):
     message.attach(MIMEText(text, "plain"))
     message.attach(MIMEText(html, "html"))
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
             server.login(sender_email, sender_password)
             server.sendmail(sender_email, to_email, message.as_string())
         print(f"DEBUG: Email OTP sent to {to_email}")

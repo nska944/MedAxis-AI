@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 import random
 import os
@@ -56,8 +56,8 @@ def login_with_email_password(req: LoginRequest):
 
 
 @router.post("/phone/generate-otp")
-def generate_phone_otp(req: PhoneOTPGenerateRequest):
-    """Look up user by phone, generate OTP, store in DB, send via SMS + email."""
+def generate_phone_otp(req: PhoneOTPGenerateRequest, background_tasks: BackgroundTasks):
+    """Look up user by phone, generate OTP, return immediately, dispatch SMS + email in background."""
     supabase = get_supabase()
     try:
         normalized = normalize_phone(req.phoneNumber)
@@ -81,10 +81,10 @@ def generate_phone_otp(req: PhoneOTPGenerateRequest):
 
         msg = f"Your MedAxis AI OTP is: {otp_code}. Valid for 5 minutes."
         if len(normalized) >= 10:
-            send_sms(normalized, msg)
+            background_tasks.add_task(send_sms, normalized, msg)
         user_email = row.get("email") or user_data.get("email")
         if user_email:
-            send_email_otp(user_email, otp_code)
+            background_tasks.add_task(send_email_otp, user_email, otp_code)
 
         return {"message": "OTP sent successfully", "success": True}
     except HTTPException:
