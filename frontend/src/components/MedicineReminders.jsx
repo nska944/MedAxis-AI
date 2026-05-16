@@ -1,17 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { db } from '../firebase/firebaseConfig';
-import {
-    collection,
-    addDoc,
-    getDocs,
-    updateDoc,
-    deleteDoc,
-    doc,
-    serverTimestamp,
-    query,
-    where
-} from 'firebase/firestore';
 import { Bell, BellOff, Clock, Check, Trash2, Plus } from 'lucide-react';
+
+// ── Local-storage helpers (replaces Firestore for browser-side reminders) ─────
+const storageKey = (uid) => `medaxis_reminders_${uid}`;
+const loadFromStorage = (uid) => {
+    try { return JSON.parse(localStorage.getItem(storageKey(uid)) || '[]'); }
+    catch { return []; }
+};
+const saveToStorage = (uid, reminders) => {
+    localStorage.setItem(storageKey(uid), JSON.stringify(reminders));
+};
 
 const TIME_SLOTS = [
     { label: 'Morning', time: '08:00', icon: '🌅' },
@@ -36,20 +34,12 @@ const MedicineReminders = ({ medicines = [], uid }) => {
     const [customTimes, setCustomTimes] = useState({});  // { [medicineName]: "HH:MM" }
     const [saving, setSaving] = useState({});
 
-    const remindersRef = uid
-        ? collection(db, 'medicine_reminders', uid, 'reminders')
-        : null;
-
-    // ── Load existing reminders from Firestore ──────────────────────────────
-    const loadReminders = useCallback(async () => {
-        if (!remindersRef) return;
-        setLoading(true);
-        try {
-            const snap = await getDocs(remindersRef);
-            setReminders(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        } catch (e) { console.error('Reminder load error:', e); }
-        finally { setLoading(false); }
-    }, [uid]); // eslint-disable-line react-hooks/exhaustive-deps
+    // ── Load existing reminders from localStorage ──────────────────────────
+    const loadReminders = useCallback(() => {
+        if (!uid) return;
+        setReminders(loadFromStorage(uid));
+        setLoading(false);
+    }, [uid]);
 
     useEffect(() => { loadReminders(); }, [loadReminders]);
 
@@ -79,43 +69,34 @@ const MedicineReminders = ({ medicines = [], uid }) => {
     };
 
     // ── Save a new reminder ──────────────────────────────────────────────────
-    const saveReminder = async (medicineName, label, time) => {
-        if (!remindersRef) return;
+    const saveReminder = (medicineName, label, time) => {
+        if (!uid) return;
         setSaving(p => ({ ...p, [medicineName]: true }));
-        try {
-            // Check if a reminder for this medicine already exists → update it
-            const existing = reminders.find(r => r.medicineName === medicineName);
-            if (existing) {
-                const docRef = doc(db, 'medicine_reminders', uid, 'reminders', existing.id);
-                await updateDoc(docRef, { label, time, enabled: true });
-            } else {
-                await addDoc(remindersRef, {
-                    medicineName,
-                    label,
-                    time,
-                    enabled: true,
-                    uid,
-                    createdAt: serverTimestamp()
-                });
-            }
-            await loadReminders();
-            setPendingSlot(p => ({ ...p, [medicineName]: null }));
-        } catch (e) { console.error('Reminder save error:', e); }
-        finally { setSaving(p => ({ ...p, [medicineName]: false })); }
+        const existing = reminders.find(r => r.medicineName === medicineName);
+        let updated;
+        if (existing) {
+            updated = reminders.map(r => r.medicineName === medicineName ? { ...r, label, time, enabled: true } : r);
+        } else {
+            updated = [...reminders, { id: Date.now().toString(), medicineName, label, time, enabled: true, uid }];
+        }
+        saveToStorage(uid, updated);
+        setReminders(updated);
+        setPendingSlot(p => ({ ...p, [medicineName]: null }));
+        setSaving(p => ({ ...p, [medicineName]: false }));
     };
 
     // ── Toggle enable/disable ────────────────────────────────────────────────
-    const toggleReminder = async (reminder) => {
-        const docRef = doc(db, 'medicine_reminders', uid, 'reminders', reminder.id);
-        await updateDoc(docRef, { enabled: !reminder.enabled });
-        setReminders(prev => prev.map(r => r.id === reminder.id ? { ...r, enabled: !r.enabled } : r));
+    const toggleReminder = (reminder) => {
+        const updated = reminders.map(r => r.id === reminder.id ? { ...r, enabled: !r.enabled } : r);
+        saveToStorage(uid, updated);
+        setReminders(updated);
     };
 
     // ── Delete a reminder ────────────────────────────────────────────────────
-    const deleteReminder = async (reminder) => {
-        const docRef = doc(db, 'medicine_reminders', uid, 'reminders', reminder.id);
-        await deleteDoc(docRef);
-        setReminders(prev => prev.filter(r => r.id !== reminder.id));
+    const deleteReminder = (reminder) => {
+        const updated = reminders.filter(r => r.id !== reminder.id);
+        saveToStorage(uid, updated);
+        setReminders(updated);
     };
 
     if (!medicines || medicines.length === 0) return null;

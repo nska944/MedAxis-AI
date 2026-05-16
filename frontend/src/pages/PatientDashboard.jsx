@@ -4,8 +4,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { auth } from '../firebase/firebaseConfig';
+import { supabase } from '../supabase/supabaseClient';
 import { User, Activity, FileText, CheckCircle, AlertCircle, TrendingUp, Upload, Footprints, RefreshCw, Shield, Pill, DownloadCloud, Bell } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { ProfileImageUpload } from '../components/ProfileImageUpload';
@@ -210,17 +209,21 @@ const PatientDashboard = () => {
             let googleAccessToken = localStorage.getItem('googleAccessToken');
 
             if (!googleAccessToken) {
-                // If not available, prompt the user to sign in with Google to grant the scope
-                const provider = new GoogleAuthProvider();
-                provider.addScope('https://www.googleapis.com/auth/fitness.activity.read');
-                const result = await signInWithPopup(auth, provider);
-                const credential = GoogleAuthProvider.credentialFromResult(result);
-                if (credential && credential.accessToken) {
-                    googleAccessToken = credential.accessToken;
-                    localStorage.setItem('googleAccessToken', googleAccessToken);
-                } else {
-                    throw new Error('Failed to retrieve Google Access Token.');
-                }
+                // Prompt re-authentication via Supabase Google OAuth to get a Google access token
+                const { data: oauthData, error: oauthError } = await supabase.auth.signInWithOAuth({
+                    provider: 'google',
+                    options: {
+                        redirectTo: window.location.href,
+                        scopes: 'https://www.googleapis.com/auth/fitness.activity.read',
+                        queryParams: { access_type: 'offline', prompt: 'consent' },
+                    },
+                });
+                if (oauthError) throw new Error(oauthError.message);
+                // After redirect the provider_token is available in the session
+                const { data: { session } } = await supabase.auth.getSession();
+                googleAccessToken = session?.provider_token || null;
+                if (!googleAccessToken) throw new Error('Failed to retrieve Google Fitness token. Please try again after signing in with Google.');
+                localStorage.setItem('googleAccessToken', googleAccessToken);
             }
 
             const token = await currentUser.getIdToken();

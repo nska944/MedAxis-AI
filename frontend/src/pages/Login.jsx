@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, RecaptchaVerifier, signInWithPhoneNumber, signInWithCustomToken } from 'firebase/auth';
-import { auth, db } from '../firebase/firebaseConfig';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { supabase } from '../supabase/supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { HeartPulse, CheckCircle, Camera, ShieldCheck } from 'lucide-react';
@@ -9,53 +7,43 @@ import * as faceapi from 'face-api.js';
 import Webcam from 'react-webcam';
 
 const Login = () => {
-    const [email, setEmail] = useState('');
+    const [email, setEmail]       = useState('');
     const [password, setPassword] = useState('');
-    const [error, setError] = useState('');
+    const [error, setError]       = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-    // 3-Layer Security States for Patients
     const { userRole, currentUser, loading, patientAuthStep, setPatientAuthStep } = useAuth();
-    
-    // Local authStep syncs with context
-    const [authStep, setAuthStepLocal] = useState(1); // 1 = Login (Email/Phone), 2 = OTP, 3 = Face, 4 = Done
 
-    const setAuthStep = (step) => {
-        setAuthStepLocal(step);
-        setPatientAuthStep(step);
-    };
+    const [authStep, setAuthStepLocal] = useState(1);
+    const setAuthStep = (step) => { setAuthStepLocal(step); setPatientAuthStep(step); };
 
     const navigate = useNavigate();
-    const [selectedRole, setSelectedRole] = useState(null); // Set dynamically after Layer 1 login
-    const [patientUid, setPatientUid] = useState(null); // Holds UID during steps 2 & 3
-    const [storedFaceDescriptor, setStoredFaceDescriptor] = useState(null); // Float32Array equivalent stored in DB
-    const [modelsLoaded, setModelsLoaded] = useState(false);
+    const [selectedRole, setSelectedRole]             = useState(null);
+    const [patientUid, setPatientUid]                 = useState(null);
+    const [storedFaceDescriptor, setStoredFaceDescriptor] = useState(null);
+    const [modelsLoaded, setModelsLoaded]             = useState(false);
     const webcamRef = React.useRef(null);
 
-    // New Auth Methods State
-    const [loginMethod, setLoginMethod] = useState('email'); // 'email' | 'phone'
+    const [loginMethod, setLoginMethod] = useState('email');
     const [phoneNumber, setPhoneNumber] = useState('');
-    const [otp, setOtp] = useState('');
-    const [isOtpSent, setIsOtpSent] = useState(false);
+    const [otp, setOtp]                 = useState('');
+    const [isOtpSent, setIsOtpSent]     = useState(false);
     const [resendTimer, setResendTimer] = useState(0);
-    const [confirmationResult, setConfirmationResult] = useState(null);
 
-    // Redirect if completely logged in (Step 4 for patients, or immediately for others)
+    // Redirect once fully authenticated
     useEffect(() => {
         if (!loading && currentUser && userRole) {
             if (userRole === 'patient') {
-                if (authStep === 4) {
-                    navigate(`/dashboard/${userRole}`);
-                }
+                if (authStep === 4) navigate(`/dashboard/${userRole}`);
             } else {
                 navigate(`/dashboard/${userRole}`);
             }
         }
     }, [currentUser, userRole, loading, navigate, authStep]);
 
-    // Load Face-API models when entering Step 3
+    // Load Face-API models for step 3
     useEffect(() => {
         const loadModels = async () => {
             try {
@@ -63,137 +51,69 @@ const Login = () => {
                 await Promise.all([
                     faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
                     faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
                 ]);
                 setModelsLoaded(true);
             } catch (err) {
-                console.error("Failed to load face-api models:", err);
-                setError(`Failed to initialize models from CDN: ${err.message || 'Network Error'}`);
+                setError(`Failed to load face models: ${err.message || 'Network Error'}`);
             }
         };
-
-        if (authStep === 3 && !modelsLoaded) {
-            loadModels();
-        }
+        if (authStep === 3 && !modelsLoaded) loadModels();
     }, [authStep, modelsLoaded]);
 
-    // NEW: Session Resumption for Patient 3nd/3rd Layer if already authenticated via Step 1
+    // Resend timer
     useEffect(() => {
-        const resumeSession = async () => {
-            if (!loading && currentUser && userRole === 'patient' && authStep === 0) {
-                console.log("DEBUG: Resuming patient session for 3-Layer Security...");
-                setSelectedRole('patient');
-                setPatientUid(currentUser.uid);
-                
-                try {
-                    const userDocRef = doc(db, 'users', currentUser.uid);
-                    const userDocSnap = await getDoc(userDocRef);
-                    if (userDocSnap.exists() && userDocSnap.data().faceData) {
-                        setStoredFaceDescriptor(userDocSnap.data().faceData);
-                    }
-                    
-                    const token = await currentUser.getIdToken();
-                    await generateBackendOTP(currentUser.uid, token);
-                    setAuthStep(2);
-                } catch (err) {
-                    console.error("Failed to resume session:", err);
-                }
-            }
-        };
-        resumeSession();
-    }, [currentUser, userRole, loading, authStep]);
-    
-    // Timer for Resend OTP
-    useEffect(() => {
-        let interval;
-        if (resendTimer > 0) {
-            interval = setInterval(() => {
-                setResendTimer(prev => prev - 1);
-            }, 1000);
-        }
-        return () => clearInterval(interval);
+        if (resendTimer <= 0) return;
+        const id = setInterval(() => setResendTimer(t => t - 1), 1000);
+        return () => clearInterval(id);
     }, [resendTimer]);
 
-    const setupRecaptcha = () => {
-        if (!window.recaptchaVerifier) {
-            window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-                'size': 'invisible'
-            });
-        }
-    };
-
+    // ── Email / Password Login (Layer 1) ──────────────────────────────────────
     const handleLogin = async (e) => {
         e.preventDefault();
         setError('');
         setIsSubmitting(true);
-
         try {
-            // --- Custom Backend Login (Verifies against Firestore Password) ---
-            const res = await fetch(`${API_BASE_URL}/auth/login`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
-            });
-            const data = await res.json();
+            const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password });
+            if (authError) throw new Error(authError.message);
 
-            if (!res.ok) {
-                throw new Error(data.detail || 'Invalid email or password.');
-            }
-
-            // Sign in with the Custom Token returned by backend
-            const userCredential = await signInWithCustomToken(auth, data.customToken);
-            const user = userCredential.user;
-            const role = data.role;
+            const user = data.user;
+            const role = user.app_metadata?.role || 'patient';
             setSelectedRole(role);
 
             if (role === 'patient') {
-                const userDocRef = doc(db, 'users', user.uid);
-                const userDocSnap = await getDoc(userDocRef);
-
-                if (userDocSnap.exists() && userDocSnap.data().faceData) {
-                    setStoredFaceDescriptor(userDocSnap.data().faceData);
-                } else {
-                    setStoredFaceDescriptor(null); // Force setup
+                // Fetch face data from backend
+                const token = data.session.access_token;
+                setPatientUid(user.id);
+                const meRes = await fetch(`${API_BASE_URL}/patient/me`, {
+                    headers: { 'Authorization': `Bearer ${token}` },
+                });
+                if (meRes.ok) {
+                    const meData = await meRes.json();
+                    setStoredFaceDescriptor(meData.faceData || null);
                 }
-
-                // Proceed to Step 2: OTP
-                setPatientUid(user.uid);
-                const token = await user.getIdToken();
-                await generateBackendOTP(user.uid, token);
+                await generateBackendOTP(user.id, token);
                 setAuthStep(2);
-                setIsSubmitting(false);
             } else {
-                // Doctors, Hospitals, Superadmins go straight in
                 setAuthStep(4);
             }
         } catch (err) {
             setError(err.message);
+        } finally {
             setIsSubmitting(false);
         }
     };
 
     const generateBackendOTP = async (uid, token, resend = false) => {
-        try {
-            const res = await fetch(`${API_BASE_URL}/patient/generate-otp`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ uid: uid })
-            });
-            if (!resend) {
-                setResendTimer(30); // Start 30s cooldown on initial or resend
-            }
-            if (!resend && res) {
-                // optional: show success toast/message
-            }
-            if (!res.ok) {
-                const data = await res.json();
-                throw new Error(data.detail || "Failed to generate OTP");
-            }
-        } catch (err) {
-            throw err;
+        const res = await fetch(`${API_BASE_URL}/patient/generate-otp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ uid }),
+        });
+        if (!resend) setResendTimer(30);
+        if (!res.ok) {
+            const d = await res.json();
+            throw new Error(d.detail || 'Failed to generate OTP');
         }
     };
 
@@ -203,22 +123,17 @@ const Login = () => {
         setError('');
         setIsSubmitting(true);
         try {
-            const token = await currentUser.getIdToken();
+            const { data: { session } } = await supabase.auth.getSession();
+            const token = session?.access_token;
             const res = await fetch(`${API_BASE_URL}/patient/verify-otp`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ uid: patientUid, otp: otp })
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ uid: patientUid, otp }),
             });
-
             if (!res.ok) {
-                const data = await res.json();
-                throw new Error(data.detail || "Invalid OTP");
+                const d = await res.json();
+                throw new Error(d.detail || 'Invalid OTP');
             }
-
-            // OTP Verified -> Go to Step 3 (Face Match)
             setAuthStep(3);
         } catch (err) {
             setError(err.message);
@@ -231,37 +146,30 @@ const Login = () => {
         if (!webcamRef.current) return;
         setError('');
         setIsSubmitting(true);
-
         try {
-            // Get Live Webcam Descriptor
-            const videoElement = webcamRef.current.video;
-            const liveDetection = await faceapi.detectSingleFace(videoElement).withFaceLandmarks().withFaceDescriptor();
-
-            if (!liveDetection) {
-                throw new Error("Could not detect a face in the webcam feed. Please ensure good lighting and look directly at the camera.");
-            }
+            const video = webcamRef.current.video;
+            const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
+            if (!detection) throw new Error('Could not detect a face. Ensure good lighting and look at the camera.');
 
             if (storedFaceDescriptor) {
-                // Compare Descriptors
-                const storedFloat32Array = new Float32Array(storedFaceDescriptor);
-                const distance = faceapi.euclideanDistance(storedFloat32Array, liveDetection.descriptor);
-
-                // distance < 0.6 is good match, closer to 0 is better.
-                const THRESHOLD = 0.5;
-
-                if (distance < THRESHOLD) {
-                    // Success!
+                const stored   = new Float32Array(storedFaceDescriptor);
+                const distance = faceapi.euclideanDistance(stored, detection.descriptor);
+                if (distance < 0.5) {
                     setAuthStep(4);
                 } else {
-                    console.warn(`Face Match Failed: Distance ${distance.toFixed(3)} > Threshold ${THRESHOLD}`);
-                    throw new Error(`Face match failed (Similarity: ${((1 - distance) * 100).toFixed(0)}%). Please ensure you are the registered user and have good lighting.`);
+                    throw new Error(`Face match failed (similarity: ${((1 - distance) * 100).toFixed(0)}%). Please try again.`);
                 }
             } else {
-                // First login: Store face descriptor in Firestore
-                const userDocRef = doc(db, 'users', patientUid);
-                const descriptorArray = Array.from(liveDetection.descriptor);
-                await setDoc(userDocRef, { faceData: descriptorArray }, { merge: true });
-                setStoredFaceDescriptor(descriptorArray);
+                // First login — save face descriptor
+                const { data: { session } } = await supabase.auth.getSession();
+                const token      = session?.access_token;
+                const descriptor = Array.from(detection.descriptor);
+                await fetch(`${API_BASE_URL}/patient/face-data`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ faceData: descriptor }),
+                });
+                setStoredFaceDescriptor(descriptor);
                 setAuthStep(4);
             }
         } catch (err) {
@@ -271,49 +179,40 @@ const Login = () => {
         }
     };
 
+    // ── Google Login ──────────────────────────────────────────────────────────
     const handleGoogleLogin = async () => {
         setError('');
         setIsSubmitting(true);
-        const provider = new GoogleAuthProvider();
-        provider.addScope('https://www.googleapis.com/auth/fitness.activity.read');
         try {
-            const result = await signInWithPopup(auth, provider);
-
-            // Enforce Email Verification Rule
-            if (result.user && !result.user.emailVerified) {
-                await auth.signOut();
-                setError('Google Sign-In is only allowed for users with a verified email address. Please verify your Google account email first.');
-                setIsSubmitting(false);
-                return;
-            }
-
-            // Capture Google Access Token to query Google REST APIs later
-            const credential = GoogleAuthProvider.credentialFromResult(result);
-            if (credential && credential.accessToken) {
-                localStorage.setItem('googleAccessToken', credential.accessToken);
-            }
+            const { error: oauthError } = await supabase.auth.signInWithOAuth({
+                provider: 'google',
+                options: {
+                    redirectTo: window.location.origin,
+                    scopes: 'https://www.googleapis.com/auth/fitness.activity.read',
+                },
+            });
+            if (oauthError) throw new Error(oauthError.message);
+            // Redirect handled by Supabase; onAuthStateChange fires on return
         } catch (err) {
             setError(err.message);
             setIsSubmitting(false);
         }
     };
 
+    // ── Phone OTP Login ───────────────────────────────────────────────────────
     const handleSendOtp = async (e) => {
         e.preventDefault();
         setError('');
         setIsSubmitting(true);
         try {
-            const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
-            
-            // --- Custom Backend OTP (Fast2SMS) ---
+            const formatted = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
             const res = await fetch(`${API_BASE_URL}/auth/phone/generate-otp`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phoneNumber: formattedPhone })
+                body: JSON.stringify({ phoneNumber: formatted }),
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.detail || "Failed to send OTP");
-            
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.detail || 'Failed to send OTP');
             setIsOtpSent(true);
             setResendTimer(30);
         } catch (err) {
@@ -329,41 +228,37 @@ const Login = () => {
         setError('');
         setIsSubmitting(true);
         try {
-            const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
-            
-            // --- Custom Backend OTP Verify ---
+            const formatted = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
             const res = await fetch(`${API_BASE_URL}/auth/phone/verify-otp`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phoneNumber: formattedPhone, otp: otp })
+                body: JSON.stringify({ phoneNumber: formatted, otp }),
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.detail || "Invalid OTP");
-            
-            // Sign in with the Custom Token returned by backend
-            await signInWithCustomToken(auth, data.customToken);
-            const role = data.role;
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.detail || 'Invalid OTP');
+
+            // Backend mints a Supabase-compatible JWT — set it as the session
+            await supabase.auth.setSession({ access_token: d.access_token, refresh_token: '' });
+            const role = d.role;
             setSelectedRole(role);
 
             if (role === 'patient') {
-                const userDocRef = doc(db, 'users', auth.currentUser.uid);
-                const userDocSnap = await getDoc(userDocRef);
-
-                if (userDocSnap.exists() && userDocSnap.data().faceData) {
-                    setStoredFaceDescriptor(userDocSnap.data().faceData);
-                } else {
-                    setStoredFaceDescriptor(null);
+                const meRes = await fetch(`${API_BASE_URL}/patient/me`, {
+                    headers: { 'Authorization': `Bearer ${d.access_token}` },
+                });
+                if (meRes.ok) {
+                    const meData = await meRes.json();
+                    setStoredFaceDescriptor(meData.faceData || null);
                 }
-
-                setPatientUid(auth.currentUser.uid);
-                const token = await auth.currentUser.getIdToken();
-                await generateBackendOTP(auth.currentUser.uid, token);
+                setPatientUid(d.uid);
+                await generateBackendOTP(d.uid, d.access_token);
                 setAuthStep(2);
             } else {
                 setAuthStep(4);
             }
         } catch (err) {
             setError(err.message);
+        } finally {
             setIsSubmitting(false);
         }
     };
@@ -376,73 +271,60 @@ const Login = () => {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                     {authStep > 1 && (
-                        <button
-                            type="button"
-                            onClick={() => { setAuthStep(1); setError(''); }}
-                            style={{ position: 'absolute', left: 0, background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.9rem', padding: '0.5rem 0' }}
-                        >
+                        <button type="button" onClick={() => { setAuthStep(1); setError(''); }}
+                            style={{ position: 'absolute', left: 0, background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.9rem', padding: '0.5rem 0' }}>
                             &larr; Back
                         </button>
                     )}
                     <h1 className="auth-title" style={{ margin: 0, marginTop: '0.5rem' }}>Welcome Back</h1>
                 </div>
-
                 <p className="auth-subtitle" style={{ marginTop: '0.5rem' }}>
-                    {authStep === 1 ? "Sign in to MedAxis AI" : `Log in to MedAxis AI as ${selectedRole?.charAt(0).toUpperCase() + selectedRole?.slice(1)}`}
+                    {authStep === 1 ? 'Sign in to MedAxis AI' : `Log in as ${selectedRole?.charAt(0).toUpperCase() + selectedRole?.slice(1)}`}
                 </p>
 
                 {error && <div className="error-msg">{error}</div>}
-
-                {currentUser && !userRole && !loading && (
-                    <div style={{ background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.9rem', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
-                        <strong>Account Created!</strong> You are signed in via {currentUser.email ? 'OAuth' : 'Phone'}, but your account has not been assigned a system role (Patient/Doctor/Hospital) yet. Please contact your hospital administrator.
-                    </div>
-                )}
-
                 <div id="recaptcha-container"></div>
 
-                {/* --- PATIENT 3-LAYER WIZARD: STEP 1 (Email/Pwd) OR Phone OR OAuth --- */}
+                {/* STEP 1 — email / phone */}
                 {authStep === 1 && (
                     <>
+                        {/* Login method tabs */}
+                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                            {['email', 'phone'].map(m => (
+                                <button key={m} type="button"
+                                    onClick={() => { setLoginMethod(m); setError(''); }}
+                                    style={{ flex: 1, padding: '0.6rem', borderRadius: '8px', border: '1px solid var(--border-color)',
+                                             background: loginMethod === m ? 'var(--primary)' : 'transparent',
+                                             color: loginMethod === m ? '#fff' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}>
+                                    {m.charAt(0).toUpperCase() + m.slice(1)}
+                                </button>
+                            ))}
+                        </div>
+
                         {loginMethod === 'email' && (
                             <form onSubmit={handleLogin}>
                                 <div className="form-group">
                                     <label className="form-label">Email Address</label>
-                                    <input
-                                        type="email"
-                                        className="form-input"
-                                        value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
-                                        required
-                                        placeholder="doctor@medaxis.ai"
-                                    />
+                                    <input type="email" className="form-input" value={email} onChange={e => setEmail(e.target.value)} required placeholder="doctor@medaxis.ai" />
                                 </div>
-
                                 <div className="form-group">
                                     <label className="form-label">Password</label>
-                                    <input
-                                        type="password"
-                                        className="form-input"
-                                        value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
-                                        required
-                                        placeholder="••••••••"
-                                    />
+                                    <input type="password" className="form-input" value={password} onChange={e => setPassword(e.target.value)} required placeholder="••••••••" />
                                 </div>
-
                                 <button type="submit" className="btn-primary" disabled={isSubmitting} style={{ marginTop: '0.5rem' }}>
                                     {isSubmitting ? <span className="loader"></span> : 'Sign In'}
                                 </button>
-
                                 <div style={{ margin: '1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem' }}>
                                     <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }}></div>
                                     <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>OR</span>
                                     <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }}></div>
                                 </div>
-
-                                <button type="button" onClick={handleGoogleLogin} disabled={isSubmitting} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', background: 'white', color: '#1f2937', border: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }}>
-                                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style={{ width: '18px', height: '18px' }} />
-                                    Contine with Google
+                                <button type="button" onClick={handleGoogleLogin} disabled={isSubmitting}
+                                    style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', background: 'white', color: '#1f2937',
+                                             border: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                             gap: '0.5rem', fontWeight: 600, cursor: 'pointer' }}>
+                                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style={{ width: '18px' }} />
+                                    Continue with Google
                                 </button>
                             </form>
                         )}
@@ -453,14 +335,7 @@ const Login = () => {
                                     <form onSubmit={handleSendOtp}>
                                         <div className="form-group">
                                             <label className="form-label">Phone Number</label>
-                                            <input
-                                                type="tel"
-                                                className="form-input"
-                                                value={phoneNumber}
-                                                onChange={(e) => setPhoneNumber(e.target.value)}
-                                                required
-                                                placeholder="+91 99999 99999"
-                                            />
+                                            <input type="tel" className="form-input" value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} required placeholder="+91 99999 99999" />
                                             <small style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>Include country code (e.g. +91)</small>
                                         </div>
                                         <button type="submit" className="btn-primary" disabled={isSubmitting}>
@@ -474,33 +349,22 @@ const Login = () => {
                                         </div>
                                         <div className="form-group">
                                             <label className="form-label">6-Digit Code</label>
-                                            <input
-                                                type="text"
-                                                className="form-input"
-                                                value={otp}
-                                                onChange={(e) => setOtp(e.target.value)}
-                                                required
-                                                placeholder="123456"
-                                                maxLength={6}
-                                                style={{ letterSpacing: '4px', textAlign: 'center', fontSize: '1.2rem', fontWeight: 600 }}
-                                            />
+                                            <input type="text" className="form-input" value={otp} onChange={e => setOtp(e.target.value)} required placeholder="123456" maxLength={6}
+                                                style={{ letterSpacing: '4px', textAlign: 'center', fontSize: '1.2rem', fontWeight: 600 }} />
                                         </div>
                                         <button type="submit" className="btn-primary" disabled={isSubmitting}>
                                             {isSubmitting ? <span className="loader"></span> : 'Verify & Log In'}
                                         </button>
-                                        <button type="button" onClick={() => setIsOtpSent(false)} style={{ background: 'none', border: 'none', color: 'var(--primary)', width: '100%', marginTop: '1rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+                                        <button type="button" onClick={() => setIsOtpSent(false)}
+                                            style={{ background: 'none', border: 'none', color: 'var(--primary)', width: '100%', marginTop: '1rem', cursor: 'pointer', fontSize: '0.9rem' }}>
                                             Change Phone Number
                                         </button>
-                                        
                                         <div style={{ textAlign: 'center', marginTop: '1rem' }}>
                                             {resendTimer > 0 ? (
-                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Resend code in {resendTimer}s</span>
+                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Resend in {resendTimer}s</span>
                                             ) : (
-                                                <button 
-                                                    type="button" 
-                                                    onClick={handleSendOtp} 
-                                                    style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
-                                                >
+                                                <button type="button" onClick={handleSendOtp}
+                                                    style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
                                                     Resend Code
                                                 </button>
                                             )}
@@ -512,45 +376,32 @@ const Login = () => {
                     </>
                 )}
 
-                {/* --- PATIENT 3-LAYER WIZARD: STEP 2 (OTP Verification) --- */}
+                {/* STEP 2 — OTP (patient layer 2) */}
                 {authStep === 2 && (
                     <form onSubmit={handleVerifyBackendOTP}>
                         <div style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', fontSize: '0.9rem' }}>
                             <ShieldCheck size={16} /> Layer 1 Passed. Enter Security PIN.
                         </div>
                         <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-                            A security OTP has been sent to your registered phone number.
+                            A security OTP has been sent to your registered phone/email.
                         </p>
                         <div className="form-group">
                             <label className="form-label">6-Digit OTP</label>
-                            <input
-                                type="text"
-                                className="form-input"
-                                value={otp}
-                                onChange={(e) => setOtp(e.target.value)}
-                                required
-                                placeholder="123456"
-                                maxLength={6}
-                                style={{ letterSpacing: '4px', textAlign: 'center', fontSize: '1.2rem', fontWeight: 600 }}
-                            />
+                            <input type="text" className="form-input" value={otp} onChange={e => setOtp(e.target.value)} required placeholder="123456" maxLength={6}
+                                style={{ letterSpacing: '4px', textAlign: 'center', fontSize: '1.2rem', fontWeight: 600 }} />
                         </div>
                         <button type="submit" className="btn-primary" disabled={isSubmitting}>
                             {isSubmitting ? <span className="loader"></span> : 'Verify PIN'}
                         </button>
-                        
                         <div style={{ textAlign: 'center', marginTop: '1.5rem' }}>
                             {resendTimer > 0 ? (
                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Resend PIN in {resendTimer}s</span>
                             ) : (
-                                <button 
-                                    type="button" 
-                                    onClick={async () => {
-                                        const token = await currentUser.getIdToken();
-                                        await generateBackendOTP(currentUser.uid, token, true);
-                                        setResendTimer(30);
-                                    }} 
-                                    style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
-                                >
+                                <button type="button" onClick={async () => {
+                                    const { data: { session } } = await supabase.auth.getSession();
+                                    await generateBackendOTP(patientUid, session?.access_token, true);
+                                    setResendTimer(30);
+                                }} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
                                     Resend Security PIN
                                 </button>
                             )}
@@ -558,18 +409,15 @@ const Login = () => {
                     </form>
                 )}
 
-                {/* --- PATIENT 3-LAYER WIZARD: STEP 3 (FACE AUTH) --- */}
+                {/* STEP 3 — Face Auth (patient layer 3) */}
                 {authStep === 3 && (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                         <div style={{ color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                            <Camera size={16} /> Layer 2 Passed. Final Step: Face Log In.
+                            <Camera size={16} /> Layer 2 Passed. Final Step: Face Login.
                         </div>
                         <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem', textAlign: 'center' }}>
-                            {storedFaceDescriptor
-                                ? "Please look straight into the camera to verify your identity."
-                                : "Face setup required. Please look straight into the camera to register your face for future logins."}
+                            {storedFaceDescriptor ? 'Look straight into the camera to verify your identity.' : 'First login: register your face for future logins.'}
                         </p>
-
                         {!modelsLoaded ? (
                             <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                                 <span className="loader" style={{ borderColor: 'var(--primary)', borderBottomColor: 'transparent', width: '32px', height: '32px', marginBottom: '1rem' }}></span>
@@ -578,13 +426,9 @@ const Login = () => {
                         ) : (
                             <>
                                 <div style={{ borderRadius: '12px', overflow: 'hidden', border: '3px solid var(--primary)', marginBottom: '1rem', background: '#000', width: '100%', maxWidth: '300px', aspectRatio: '4/3' }}>
-                                    <Webcam
-                                        audio={false}
-                                        ref={webcamRef}
-                                        screenshotFormat="image/jpeg"
-                                        videoConstraints={{ facingMode: "user" }}
-                                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                                    />
+                                    <Webcam audio={false} ref={webcamRef} screenshotFormat="image/jpeg"
+                                        videoConstraints={{ facingMode: 'user' }}
+                                        style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                 </div>
                                 <button onClick={handleFaceAuthentication} className="btn-primary" disabled={isSubmitting} style={{ width: '100%' }}>
                                     {isSubmitting ? <span className="loader"></span> : (storedFaceDescriptor ? 'Verify Face' : 'Register & Log In')}
@@ -599,10 +443,9 @@ const Login = () => {
                 </p>
             </div>
 
-            {/* Footer */}
             <footer style={{ marginTop: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                 <div style={{ marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
-                    Created by Preethi M, Vinuthashree Gowd & Yashavanthagowda R G — BNM Institute of Technology
+                    Created by Preethi M, Vinuthashree Gowd &amp; Yashavanthagowda R G — BNM Institute of Technology
                 </div>
                 By logging in, you agree to our <Link to="/privacy" style={{ color: 'var(--primary)', textDecoration: 'underline' }}>Privacy Policy</Link>
             </footer>

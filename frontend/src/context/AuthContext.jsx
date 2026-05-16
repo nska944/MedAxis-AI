@@ -1,33 +1,31 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { auth, db } from '../firebase/firebaseConfig';
-import { doc, getDoc } from 'firebase/firestore';
+import { supabase } from '../supabase/supabaseClient';
 
 const AuthContext = createContext();
 
-export const useAuth = () => {
-    return useContext(AuthContext);
-};
+export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }) => {
     const [currentUser, setCurrentUser] = useState(null);
-    const [userRole, setUserRole] = useState(null);
-    const [loading, setLoading] = useState(true);
+    const [userRole, setUserRole]       = useState(null);
+    const [loading, setLoading]         = useState(true);
+    const [patientAuthStep, setPatientAuthStep] = useState(0);
 
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            setLoading(true);
-            if (user) {
-                setCurrentUser(user);
-                try {
-                    // Force token refresh to ensure claims are up to date
-                    const tokenResult = await user.getIdTokenResult(true);
-                    const role = tokenResult.claims.role;
-                    setUserRole(role || null);
-                } catch (error) {
-                    console.error("Error fetching user claims:", error);
-                    setUserRole(null);
-                }
+        // Initialise from the current session (covers page reloads)
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            if (session?.user) {
+                setCurrentUser(session.user);
+                setUserRole(session.user.app_metadata?.role || null);
+            }
+            setLoading(false);
+        });
+
+        // Subscribe to future auth changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            if (session?.user) {
+                setCurrentUser(session.user);
+                setUserRole(session.user.app_metadata?.role || null);
             } else {
                 setCurrentUser(null);
                 setUserRole(null);
@@ -35,14 +33,12 @@ export const AuthProvider = ({ children }) => {
             setLoading(false);
         });
 
-        return unsubscribe;
+        return () => subscription?.unsubscribe();
     }, []);
 
-    const [patientAuthStep, setPatientAuthStep] = useState(0);
-
-    const logout = () => {
+    const logout = async () => {
         setPatientAuthStep(0);
-        return signOut(auth);
+        await supabase.auth.signOut();
     };
 
     const value = {
@@ -51,7 +47,7 @@ export const AuthProvider = ({ children }) => {
         loading,
         patientAuthStep,
         setPatientAuthStep,
-        logout
+        logout,
     };
 
     return (

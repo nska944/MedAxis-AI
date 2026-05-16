@@ -1,25 +1,22 @@
 # main.py
 # ─────────────────────────────────────────────────────────────────────────────
-# Application entrypoint. Initialises Firebase, wires up CORS, and registers
-# all APIRouter modules. Run with: uvicorn main:app --reload
+# Application entry point. Initialises Supabase, wires CORS, registers routers.
+# Run with: uvicorn main:app --reload
 # ─────────────────────────────────────────────────────────────────────────────
 
-import random
-import string
+import base64
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from firebase_config import initialize_firebase
 
-# Initialise Firebase Admin SDK before any router imports touch it
-initialize_firebase()
+from supabase_config import get_supabase, build_user_row, merge_user_doc
 
 app = FastAPI(
     title="MedAxis AI Backend",
-    description="FastAPI service for the MedAxis AI Platform",
-    version="1.0.0",
+    description="FastAPI service for the MedAxis AI Platform (Supabase edition)",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -30,6 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ─── Root / Health ────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -39,170 +37,111 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    """Basic health check endpoint to verify backend status."""
     return {"status": "ok", "service": "MedAxis AI Backend"}
 
 
 # ─── Auth Register ────────────────────────────────────────────────────────────
-# Kept in main.py because it is a public endpoint with no router grouping.
 
-from pydantic import BaseModel
-from firebase_admin import firestore
-from fastapi import Depends, UploadFile, File
 from routers.auth_helpers import RegisterRequest, generate_unique_id, build_standard_user_doc, get_any_authenticated_uid, normalize_phone
 
 
 @app.post("/auth/register")
 def register_user(req: RegisterRequest):
     """
-    Public self-registration endpoint — patients ONLY.
-    - Doctor accounts must be created by a hospital via POST /hospital/create-doctor.
-    - Hospital accounts must be created by a superadmin via POST /superadmin/create-user.
-    Role is enforced server-side regardless of what the client sends.
+    Public self-registration — patients ONLY.
+    Doctor/hospital/superadmin accounts are created by privileged roles.
     """
-    from fastapi import HTTPException
-
     if not req.email or not req.password:
-        raise HTTPException(status_code=400, detail="Missing essential fields: email and password are required.")
-
-    # ── Server-side role gate ──────────────────────────────────────────────────
+        raise HTTPException(status_code=400, detail="email and password are required.")
     if req.role in ("doctor", "hospital", "superadmin"):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Self-registration is not allowed for this role. "
-                "Doctor accounts are created by hospitals. "
-                "Hospital accounts are created by super admins."
-            ),
-        )
-
-    # Only patients reach here
+        raise HTTPException(status_code=403, detail="Self-registration is not allowed for this role.")
     if req.role != "patient":
-        raise HTTPException(status_code=400, detail="Invalid role. Only 'patient' self-registration is allowed.")
+        raise HTTPException(status_code=400, detail="Only 'patient' self-registration is allowed.")
 
+    supabase = get_supabase()
     try:
-        from firebase_admin import auth
-        user_record = auth.create_user(email=req.email, password=req.password, display_name=req.name)
-        auth.set_custom_user_claims(user_record.uid, {"role": "patient"})
+        # Create user in Supabase Auth with role in app_metadata
+        auth_response = supabase.auth.admin.create_user({
+            "email":         req.email,
+            "password":      req.password,
+            "email_confirm": True,
+            "user_metadata": {"full_name": req.name},
+            "app_metadata":  {"role": "patient"},
+        })
+        user = auth_response.user
+        uid  = user.id
 
-        db = firestore.client()
-        health_id = generate_unique_id(db, "healthId", "PAT-", 6)
-        
-        # Split name for dashboard consistency
+        health_id = generate_unique_id(supabase, "healthId", "PAT-", 6)
         name_parts = req.name.strip().split(" ", 1)
         first_name = name_parts[0]
-        last_name = name_parts[1] if len(name_parts) > 1 else ""
-
-        # Normalize phone number before saving
+        last_name  = name_parts[1] if len(name_parts) > 1 else ""
         normalized_phone = normalize_phone(req.phoneNumber)
-        
-        # Handle base64 profile image if provided
+
+        # Handle base64 profile image
         profile_image_url = req.profileImage
         if profile_image_url and profile_image_url.startswith("data:image/"):
             try:
-                import base64
-                from firebase_admin import storage
                 header, encoded = profile_image_url.split(",", 1)
                 mime_type = header.split(";")[0].split(":")[1]
-                file_ext = mime_type.split("/")[1]
+                file_ext  = mime_type.split("/")[1]
                 image_data = base64.b64decode(encoded)
-                
-                bucket = storage.bucket()
-                blob = bucket.blob(f"profile_images/{user_record.uid}.{file_ext}")
-                blob.upload_from_string(image_data, content_type=mime_type)
-                blob.make_public()
-                profile_image_url = blob.public_url
+                path = f"profile_images/{uid}.{file_ext}"
+                supabase.storage.from_("medaxis").upload(path, image_data, {"content-type": mime_type, "upsert": "true"})
+                profile_image_url = supabase.storage.from_("medaxis").get_public_url(path)
             except Exception as img_err:
                 print(f"Base64 image upload failed during registration: {img_err}")
 
         user_data = build_standard_user_doc(
-            uid=user_record.uid,
-            role="patient",
-            email=req.email,
-            name=req.name,
-            firstName=first_name,
-            lastName=last_name,
-            password=req.password,  # Store password in Firestore as requested
-            healthId=health_id,
-            phoneNumber=normalized_phone,
+            uid=uid, role="patient", email=req.email, name=req.name,
+            firstName=first_name, lastName=last_name,
+            healthId=health_id, phoneNumber=normalized_phone,
             profileImage=profile_image_url,
-            height=req.height,
-            weight=req.weight,
-            bmi=req.bmi
+            height=req.height, weight=req.weight, bmi=req.bmi,
         )
+        row = build_user_row(user_data)
+        supabase.table("users").insert(row).execute()
 
-        db.collection("users").document(user_record.uid).set(user_data)
-        return {
-            "success": True,
-            "uid": user_record.uid,
-            "healthId": health_id,
-            "message": "Patient account registered successfully",
-        }
-    except Exception as e:
-        error_msg = str(e)
-        if "EMAIL_EXISTS" in error_msg or "email-already-exists" in error_msg:
-            raise HTTPException(status_code=400, detail="The email address is already in use by another account.")
-        raise HTTPException(status_code=500, detail=f"Registration failed: {error_msg}")
+        return {"success": True, "uid": uid, "healthId": health_id, "message": "Patient account registered successfully"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        msg = str(exc)
+        if "already registered" in msg or "email_exists" in msg or "already been registered" in msg:
+            raise HTTPException(status_code=400, detail="The email address is already in use.")
+        raise HTTPException(status_code=500, detail=f"Registration failed: {msg}")
 
 
 # ─── File Uploads ─────────────────────────────────────────────────────────────
 
 @app.post("/upload/profile-image")
-async def upload_profile_image(
-    file: UploadFile = File(...),
-    token_uid: str = Depends(get_any_authenticated_uid)
-):
-    """
-    Allows any authenticated user to upload/update their profile image.
-    Enforces a 5MB size limit. Saves to profile_images/{uid}.jpg in Storage,
-    and updates users/{uid}.profileImage in Firestore.
-    """
-    from fastapi import HTTPException
-    
+async def upload_profile_image(file: UploadFile = File(...), token_uid: str = Depends(get_any_authenticated_uid)):
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image.")
-        
     file_bytes = await file.read()
     if len(file_bytes) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File size exceeds 5MB limit.")
-        
+        raise HTTPException(status_code=400, detail="File size exceeds 5 MB limit.")
+
     try:
-        from firebase_admin import storage, firestore
-        bucket = storage.bucket()
-        blob = bucket.blob(f"profile_images/{token_uid}.jpg")
-        blob.upload_from_string(file_bytes, content_type=file.content_type)
-        blob.make_public()
-        image_url = blob.public_url
-        
-        db = firestore.client()
-        # Use set with merge=True in case the document was deleted (cleanup)
-        db.collection("users").document(token_uid).set({"profileImage": image_url}, merge=True)
-        
-        return {
-            "success": True, 
-            "profileImage": image_url, 
-            "message": "Profile image updated successfully."
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to upload profile image: {str(e)}")
+        supabase  = get_supabase()
+        path      = f"profile_images/{token_uid}.jpg"
+        supabase.storage.from_("medaxis").upload(path, file_bytes, {"content-type": file.content_type, "upsert": "true"})
+        image_url = supabase.storage.from_("medaxis").get_public_url(path)
+        merge_user_doc(supabase, token_uid, {"profileImage": image_url})
+        return {"success": True, "profileImage": image_url, "message": "Profile image updated successfully."}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to upload profile image: {exc}")
 
 
 @app.get("/user/me")
 def get_current_user_profile(token_uid: str = Depends(get_any_authenticated_uid)):
-    """
-    Returns the user's Firestore document regardless of their role.
-    Used by frontend to load profileImage URL and basic info common across all roles.
-    """
-    from fastapi import HTTPException
-    from firebase_admin import firestore
-    
-    db = firestore.client()
-    doc = db.collection("users").document(token_uid).get()
-    
-    if not doc.exists:
+    supabase = get_supabase()
+    result = supabase.table("users").select("document, uid, role, email").eq("uid", token_uid).maybe_single().execute()
+    if not result.data:
         raise HTTPException(status_code=404, detail="User profile not found")
-        
-    return doc.to_dict()
+    row = result.data
+    doc = dict(row.get("document") or {})
+    doc.update({"uid": row["uid"], "role": row["role"], "email": row["email"]})
+    return doc
 
 
 # ─── Register Routers ─────────────────────────────────────────────────────────

@@ -85,14 +85,12 @@ const Register = () => {
 
             if (data.success) {
                 // Auto-sign in after successful registration
-                import('firebase/auth').then(({ signInWithEmailAndPassword }) => {
-                    import('../firebase/firebaseConfig').then(({ auth }) => {
-                        signInWithEmailAndPassword(auth, formData.email, formData.password)
-                            .catch(err => {
-                                setError("Account created! Please sign in: " + err.message);
-                                setIsSubmitting(false);
-                            });
-                    });
+                import('../supabase/supabaseClient').then(({ supabase }) => {
+                    supabase.auth.signInWithPassword({ email: formData.email, password: formData.password })
+                        .catch(err => {
+                            setError("Account created! Please sign in manually: " + err.message);
+                            setIsSubmitting(false);
+                        });
                 });
             }
         } catch (err) {

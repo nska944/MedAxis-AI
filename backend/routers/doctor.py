@@ -1,13 +1,9 @@
 # routers/doctor.py
-# ─────────────────────────────────────────────────────────────────────────────
-# All /doctor/* endpoints.
-# ─────────────────────────────────────────────────────────────────────────────
-
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from firebase_admin import firestore, auth
 
+from supabase_config import get_supabase
 from routers.auth_helpers import (
     get_current_doctor_uid,
     DoctorCommentRequest,
@@ -20,273 +16,203 @@ from routers.auth_helpers import (
 router = APIRouter()
 
 
+def _assert_doctor_role(supabase, uid: str):
+    """Verify the uid belongs to a doctor (via Supabase Auth app_metadata)."""
+    try:
+        response = supabase.auth.admin.get_user_by_id(uid)
+        role = (response.user.app_metadata or {}).get("role", "")
+        if role != "doctor":
+            raise HTTPException(status_code=403, detail="Unauthorized: Only verified doctors can perform this action.")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+
 @router.get("/doctor/reports")
 def get_doctor_reports(doctor_uid: str):
-    """
-    Retrieves all DiagnosticReports from patients ASSIGNED to this doctor.
-    """
+    supabase = get_supabase()
     try:
-        user_record = auth.get_user(doctor_uid)
-        claims = user_record.custom_claims or {}
-        if claims.get('role') != 'doctor':
-            raise HTTPException(status_code=403, detail="Unauthorized: Only verified doctors can view reports.")
+        _assert_doctor_role(supabase, doctor_uid)
 
-        db = firestore.client()
-        assignments_ref = db.collection("doctor_assignments").document(doctor_uid).collection("patients").stream()
-        assigned_patient_uids = [doc.id for doc in assignments_ref]
-
-        if not assigned_patient_uids:
+        assignments = supabase.table("doctor_assignments").select("patient_uid").eq("doctor_uid", doctor_uid).execute()
+        patient_uids = [r["patient_uid"] for r in (assignments.data or [])]
+        if not patient_uids:
             return {"reports": []}
 
         all_reports = []
-        for p_uid in assigned_patient_uids:
-            consent_doc = db.collection("consents").document(p_uid).collection("doctors").document(doctor_uid).get()
-            if not consent_doc.exists or not consent_doc.to_dict().get("granted", False):
+        for p_uid in patient_uids:
+            consent = supabase.table("consents").select("granted").eq("patient_uid", p_uid).eq("doctor_uid", doctor_uid).maybe_single().execute()
+            if not consent.data or not consent.data.get("granted"):
                 continue
 
-            reports_ref = db.collection("fhir_reports").document(p_uid).collection("reports").stream()
-            for doc in reports_ref:
-                report_data = doc.to_dict()
-                report_data["patient_uid"] = p_uid
-                alert_query = db.collection("alerts").where("report_id", "==", report_data["id"]).limit(1).stream()
-                alert_docs = list(alert_query)
-                if alert_docs:
-                    report_data["alert_status"] = alert_docs[0].to_dict().get("status", "unresolved")
-                    report_data["alert_id"] = alert_docs[0].id
+            reports_res = supabase.table("fhir_reports").select("document").eq("user_id", p_uid).eq("collection_type", "reports").execute()
+            for row in (reports_res.data or []):
+                rd = dict(row["document"])
+                rd["patient_uid"] = p_uid
+                alert_res = supabase.table("alerts").select("id, status").eq("report_id", rd.get("id", "")).limit(1).execute()
+                if alert_res.data:
+                    rd["alert_status"] = alert_res.data[0].get("status", "unresolved")
+                    rd["alert_id"]     = alert_res.data[0]["id"]
                 else:
-                    report_data["alert_status"] = "none"
-                all_reports.append(report_data)
+                    rd["alert_status"] = "none"
+                all_reports.append(rd)
 
         return {"reports": all_reports}
-    except Exception as e:
-        if hasattr(e, 'status_code'):
-            raise e
-        raise HTTPException(status_code=500, detail=f"Failed to fetch reports: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch reports: {exc}")
 
 
 @router.post("/doctor/resolve-alert")
 def resolve_high_risk_alert(req: AlertResolveRequest):
-    """Allows a doctor to mark an alert as resolved."""
+    supabase = get_supabase()
     try:
-        user_record = auth.get_user(req.doctor_uid)
-        claims = user_record.custom_claims or {}
-        if claims.get('role') != 'doctor':
-            raise HTTPException(status_code=403, detail="Unauthorized: Only verified doctors can resolve alerts.")
+        _assert_doctor_role(supabase, req.doctor_uid)
 
-        db = firestore.client()
-        alert_ref = db.collection("alerts").document(req.alert_id)
-        alert_doc = alert_ref.get()
-        if not alert_doc.exists:
+        alert_res = supabase.table("alerts").select("id").eq("id", req.alert_id).maybe_single().execute()
+        if not alert_res.data:
             raise HTTPException(status_code=404, detail="Alert not found.")
 
-        alert_ref.update({
-            "status": "resolved",
-            "resolved_at": firestore.SERVER_TIMESTAMP,
+        supabase.table("alerts").update({
+            "status":      "resolved",
+            "resolved_at": datetime.utcnow().isoformat(),
             "resolved_by": req.doctor_uid,
-        })
+        }).eq("id", req.alert_id).execute()
 
-        db.collection("audit_logs").document().set({
+        supabase.table("audit_logs").insert({
             "action": "RESOLVE_ALERT",
-            "doctor_uid": req.doctor_uid,
-            "alert_id": req.alert_id,
-            "timestamp": firestore.SERVER_TIMESTAMP,
-        })
+            "document": {"doctor_uid": req.doctor_uid, "alert_id": req.alert_id},
+        }).execute()
 
         return {"message": "Alert resolved successfully."}
-    except Exception as e:
-        if hasattr(e, 'status_code'):
-            raise e
-        raise HTTPException(status_code=500, detail=f"Failed to resolve alert: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to resolve alert: {exc}")
 
 
 @router.post("/doctor/add-comment")
 def add_doctor_comment(req: DoctorCommentRequest):
-    """
-    Allows a doctor to append a comment to a specific DiagnosticReport.
-    Verifies 'doctor' custom claim, appends to note array, and writes audit log.
-    """
+    supabase = get_supabase()
     try:
-        user_record = auth.get_user(req.doctor_uid)
-        claims = user_record.custom_claims or {}
-        if claims.get('role') != 'doctor':
-            raise HTTPException(status_code=403, detail="Unauthorized: Only verified doctors can add comments.")
+        _assert_doctor_role(supabase, req.doctor_uid)
 
-        db = firestore.client()
-        report_ref = db.collection("fhir_reports").document(req.patient_uid).collection("reports").document(req.report_id)
-        report_doc = report_ref.get()
-        if not report_doc.exists:
+        report_res = supabase.table("fhir_reports").select("document").eq("user_id", req.patient_uid).eq("collection_type", "reports").execute()
+        target = None
+        for row in (report_res.data or []):
+            if row["document"].get("id") == req.report_id:
+                target = row
+                break
+        if target is None:
             raise HTTPException(status_code=404, detail="DiagnosticReport not found.")
 
-        new_note = {
-            "author": req.doctor_uid,
+        doc   = dict(target["document"])
+        notes = doc.get("note", [])
+        notes.append({
+            "author":    req.doctor_uid,
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "type": "doctor_comment",
-            "text": req.comment,
-        }
-        notes = report_doc.to_dict().get("note", [])
-        notes.append(new_note)
-        report_ref.update({"note": notes})
-
-        db.collection("audit_logs").document().set({
-            "action": "ADD_DOCTOR_COMMENT",
-            "doctor_uid": req.doctor_uid,
-            "patient_uid": req.patient_uid,
-            "report_id": req.report_id,
-            "timestamp": firestore.SERVER_TIMESTAMP,
+            "type":      "doctor_comment",
+            "text":      req.comment,
         })
+        doc["note"] = notes
 
-        return {"message": "Comment added successfully.", "note": new_note}
-    except Exception as e:
-        if hasattr(e, 'status_code'):
-            raise e
-        raise HTTPException(status_code=500, detail=f"Failed to add comment: {str(e)}")
+        supabase.table("fhir_reports").update({"document": doc}).eq("user_id", req.patient_uid).eq("id", req.report_id).eq("collection_type", "reports").execute()
+
+        supabase.table("audit_logs").insert({
+            "action": "ADD_DOCTOR_COMMENT",
+            "document": {"doctor_uid": req.doctor_uid, "patient_uid": req.patient_uid, "report_id": req.report_id},
+        }).execute()
+
+        return {"message": "Comment added successfully.", "note": notes[-1]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to add comment: {exc}")
 
 
 @router.post("/doctor/add-prescription")
 def add_prescription(payload: PrescriptionRequest, doctor_uid: str = Depends(get_current_doctor_uid)):
-    """
-    Create a FHIR MedicationRequest-based prescription for a patient.
-    Verifies doctor role via Firebase token, checks consent, builds FHIR bundle.
-    """
     from prescription_utils import build_prescription_bundle
-
+    supabase = get_supabase()
     try:
-        db = firestore.client()
-
-        consent_ref = db.collection("consents").document(payload.patient_uid).get()
-        if consent_ref.exists:
-            granted_doctors = consent_ref.to_dict().get("granted_doctors", [])
-            if doctor_uid not in granted_doctors:
-                raise HTTPException(status_code=403, detail="Patient has not granted you access. Request consent first.")
-
-        medications_dicts = [med.dict() for med in payload.medications]
+        medications  = [med.dict() for med in payload.medications]
         prescription = build_prescription_bundle(
-            patient_uid=payload.patient_uid,
-            doctor_uid=doctor_uid,
-            medications=medications_dicts,
-            notes=payload.notes or "",
+            patient_uid=payload.patient_uid, doctor_uid=doctor_uid,
+            medications=medications, notes=payload.notes or "",
         )
-
-        db.collection("fhir_prescriptions") \
-          .document(payload.patient_uid) \
-          .collection("prescriptions") \
-          .document(prescription["id"]) \
-          .set(prescription)
-
-        db.collection("audit_logs").document().set({
+        supabase.table("fhir_prescriptions").insert({
+            "id": prescription["id"], "user_id": payload.patient_uid, "document": prescription,
+        }).execute()
+        supabase.table("audit_logs").insert({
             "action": "prescription_created",
-            "doctor_uid": doctor_uid,
-            "patient_uid": payload.patient_uid,
-            "prescription_id": prescription["id"],
-            "medication_names": prescription["medication_names"],
-            "timestamp": firestore.SERVER_TIMESTAMP,
-        })
-
+            "document": {"doctor_uid": doctor_uid, "patient_uid": payload.patient_uid,
+                         "prescription_id": prescription["id"]},
+        }).execute()
         return {"message": "Prescription created successfully.", "prescription": prescription}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create prescription: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to create prescription: {exc}")
+
 
 @router.put("/doctor/profile")
 def update_doctor_profile(payload: DoctorProfileUpdateRequest, doctor_uid: str = Depends(get_current_doctor_uid)):
-    """
-    Updates the authenticated doctor's profile fields.
-    """
+    supabase = get_supabase()
     try:
-        db = firestore.client()
-        doctor_ref = db.collection("users").document(doctor_uid)
-        
-        updates = {}
-        if payload.specialization is not None:
-            updates["specialization"] = payload.specialization
-        if payload.qualification is not None:
-            updates["qualification"] = payload.qualification
-        if payload.yearsOfExperience is not None:
-            updates["yearsOfExperience"] = payload.yearsOfExperience
-        if payload.bio is not None:
-            updates["bio"] = payload.bio
-            
-        if updates:
-            updates["updatedAt"] = firestore.SERVER_TIMESTAMP
-            doctor_ref.update(updates)
-            
+        updates = {k: v for k, v in payload.dict().items() if v is not None}
+        if not updates:
+            return {"message": "No updates provided.", "updates": {}}
+        from supabase_config import merge_user_doc
+        merge_user_doc(supabase, doctor_uid, updates)
         return {"message": "Profile updated successfully.", "updates": updates}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update profile: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to update profile: {exc}")
 
 
 @router.get("/doctor/patient-prescriptions")
-def get_patient_uploaded_prescriptions(
-    patient_uid: str,
-    doctor_uid: str = Depends(get_current_doctor_uid)
-):
-    """
-    Returns all patient-uploaded & AI-analyzed prescriptions for a given patient UID.
-    Doctor must be authenticated. Does NOT allow deletion.
-    """
+def get_patient_uploaded_prescriptions(patient_uid: str, doctor_uid: str = Depends(get_current_doctor_uid)):
+    supabase = get_supabase()
     try:
-        db = firestore.client()
-        docs = (
-            db.collection("fhir_prescriptions")
-            .document(patient_uid)
-            .collection("prescriptions")
-            .order_by("created_at", direction=firestore.Query.DESCENDING)
-            .stream()
-        )
+        result = supabase.table("fhir_prescriptions").select("id, document").eq("user_id", patient_uid).order("created_at", desc=True).execute()
         prescriptions = []
-        for doc in docs:
-            d = doc.to_dict()
-            d["id"] = doc.id
+        for row in (result.data or []):
+            d = dict(row.get("document") or {})
+            d["id"] = row["id"]
             prescriptions.append(d)
         return {"prescriptions": prescriptions}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/doctor/add-prescription-comment")
-def add_prescription_comment(
-    req: PrescriptionCommentRequest,
-    doctor_uid: str = Depends(get_current_doctor_uid)
-):
-    """
-    Allows a doctor to append a comment to a patient-uploaded prescription.
-    Comment is appended to the doctor_comments array on the prescription document.
-    Doctors may NOT delete prescriptions or patient data.
-    """
+def add_prescription_comment(req: PrescriptionCommentRequest, doctor_uid: str = Depends(get_current_doctor_uid)):
+    supabase = get_supabase()
     try:
-        db = firestore.client()
-
-        rx_ref = (
-            db.collection("fhir_prescriptions")
-            .document(req.patient_uid)
-            .collection("prescriptions")
-            .document(req.prescription_id)
-        )
-        rx_doc = rx_ref.get()
-        if not rx_doc.exists:
+        rx_res = supabase.table("fhir_prescriptions").select("document").eq("user_id", req.patient_uid).eq("id", req.prescription_id).maybe_single().execute()
+        if not rx_res.data:
             raise HTTPException(status_code=404, detail="Prescription not found.")
 
+        doc      = dict(rx_res.data["document"])
+        comments = doc.get("doctor_comments", [])
         new_comment = {
-            "author": doctor_uid,
+            "author":    doctor_uid,
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "type": "doctor_comment",
-            "text": req.comment,
+            "type":      "doctor_comment",
+            "text":      req.comment,
         }
-        existing = rx_doc.to_dict().get("doctor_comments", [])
-        existing.append(new_comment)
-        rx_ref.update({"doctor_comments": existing})
+        comments.append(new_comment)
+        doc["doctor_comments"] = comments
 
-        db.collection("audit_logs").document().set({
+        supabase.table("fhir_prescriptions").update({"document": doc}).eq("user_id", req.patient_uid).eq("id", req.prescription_id).execute()
+        supabase.table("audit_logs").insert({
             "action": "ADD_PRESCRIPTION_COMMENT",
-            "doctor_uid": doctor_uid,
-            "patient_uid": req.patient_uid,
-            "prescription_id": req.prescription_id,
-            "timestamp": firestore.SERVER_TIMESTAMP,
-        })
+            "document": {"doctor_uid": doctor_uid, "patient_uid": req.patient_uid, "prescription_id": req.prescription_id},
+        }).execute()
 
         return {"message": "Comment added successfully.", "comment": new_comment}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add comment: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to add comment: {exc}")
