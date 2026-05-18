@@ -108,21 +108,10 @@ def normalize_phone(phone: str) -> str:
     return digits[-10:] if len(digits) >= 10 else digits
 
 
-def send_email_otp(to_email: str, otp_code: str) -> tuple[bool, str]:
-    """
-    Send an OTP via Gmail SMTP. Returns (success, message) so callers can
-    surface real errors. Always logs to stdout for Render log inspection.
-    """
-    import smtplib
+def _build_otp_email(to_email: str, otp_code: str, sender_email: str):
+    """Build the MIME multipart email body."""
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
-
-    sender_email    = os.getenv("EMAIL_SENDER")
-    sender_password = os.getenv("EMAIL_APP_PASSWORD")
-    if not sender_email or not sender_password:
-        msg = f"EMAIL config missing (EMAIL_SENDER/EMAIL_APP_PASSWORD not set). OTP {otp_code} for {to_email} NOT sent."
-        print(f"ERROR: {msg}")
-        return (False, msg)
 
     message = MIMEMultipart("alternative")
     message["Subject"] = "MedAxis AI - Your Security OTP"
@@ -133,18 +122,75 @@ def send_email_otp(to_email: str, otp_code: str) -> tuple[bool, str]:
     html = f"""
     <html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
         <div style="background:#fff;padding:30px;border-radius:12px;max-width:500px;margin:auto;border:1px solid #e0e0e0;">
-            <h2 style="color:#6366f1;text-align:center;">MedAxis AI Security</h2>
-            <p style="font-size:1.1rem;color:#333;text-align:center;">Your one-time security code is:</p>
-            <div style="background:#f0fdf4;border:2px dashed #10b981;padding:15px;text-align:center;
-                        font-size:2rem;font-weight:bold;color:#059669;letter-spacing:5px;margin:20px 0;">
+            <h2 style="color:#5B6F49;text-align:center;font-family:Georgia,serif;font-weight:400;">MedAxis</h2>
+            <p style="font-size:1rem;color:#333;text-align:center;">Your one-time security code:</p>
+            <div style="background:#FBF9F4;border:1px dashed #5B6F49;padding:18px;text-align:center;
+                        font-size:2rem;font-weight:bold;color:#3F4F33;letter-spacing:6px;margin:20px 0;">
                 {otp_code}
             </div>
-            <p style="font-size:0.9rem;color:#666;text-align:center;">Valid for <b>5 minutes</b>.</p>
+            <p style="font-size:0.85rem;color:#666;text-align:center;">Valid for <b>5 minutes</b>.</p>
+            <p style="font-size:0.75rem;color:#999;text-align:center;margin-top:1.5rem;">If you didn't request this, ignore this email.</p>
         </div>
     </body></html>
     """
     message.attach(MIMEText(text, "plain"))
     message.attach(MIMEText(html, "html"))
+    return message, text, html
+
+
+def _send_via_resend(to_email: str, otp_code: str) -> tuple[bool, str] | None:
+    """
+    Send via Resend HTTPS API. Works on Render free tier (SMTP is blocked).
+    Returns None if RESEND_API_KEY isn't set so caller can fall back to SMTP.
+    """
+    import requests
+    api_key  = os.getenv("RESEND_API_KEY")
+    if not api_key:
+        return None
+    sender   = os.getenv("RESEND_FROM") or os.getenv("EMAIL_SENDER") or "onboarding@resend.dev"
+    _, text, html = _build_otp_email(to_email, otp_code, sender)
+    try:
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "from":    f"MedAxis AI <{sender}>",
+                "to":      [to_email],
+                "subject": "MedAxis AI - Your Security OTP",
+                "html":    html,
+                "text":    text,
+            },
+            timeout=15,
+        )
+        if resp.status_code in (200, 202):
+            return (True, f"Email OTP sent to {to_email} via Resend (id={resp.json().get('id','?')})")
+        return (False, f"Resend rejected request: HTTP {resp.status_code} — {resp.text[:200]}")
+    except Exception as exc:
+        return (False, f"Resend call failed: {type(exc).__name__}: {exc}")
+
+
+def send_email_otp(to_email: str, otp_code: str) -> tuple[bool, str]:
+    """
+    Send an OTP email. Prefers Resend (HTTPS API) since Render Free blocks SMTP;
+    falls back to Gmail SMTP if RESEND_API_KEY isn't set.
+    """
+    # 1. Try Resend (HTTPS — works on Render free)
+    resend_result = _send_via_resend(to_email, otp_code)
+    if resend_result is not None:
+        ok, message = resend_result
+        print(f"{'DEBUG' if ok else 'ERROR'}: {message}")
+        return resend_result
+
+    # 2. Fall back to Gmail SMTP (works locally, not on Render free)
+    import smtplib
+    sender_email    = os.getenv("EMAIL_SENDER")
+    sender_password = os.getenv("EMAIL_APP_PASSWORD")
+    if not sender_email or not sender_password:
+        msg = f"No email backend configured. Set RESEND_API_KEY (recommended) or EMAIL_SENDER+EMAIL_APP_PASSWORD. OTP {otp_code} for {to_email} NOT sent."
+        print(f"ERROR: {msg}")
+        return (False, msg)
+
+    message, _, _ = _build_otp_email(to_email, otp_code, sender_email)
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
             server.login(sender_email, sender_password)
