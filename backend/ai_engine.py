@@ -7,7 +7,20 @@ def get_openai_client() -> OpenAI:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable is missing.")
-    return OpenAI(api_key=api_key, max_retries=2, timeout=60.0)
+    # Render Free has a 30s request timeout — keep OpenAI well under that.
+    return OpenAI(api_key=api_key, max_retries=1, timeout=22.0)
+
+
+# Cap input we send to the model so a 50-page PDF can't blow past Render's 30s limit.
+# 12K chars ≈ 3K tokens — well under gpt-4o-mini's 128K context, but bounds latency.
+_MAX_INPUT_CHARS = 12000
+
+def _truncate(text: str, limit: int = _MAX_INPUT_CHARS) -> str:
+    if not text or len(text) <= limit:
+        return text or ""
+    head = int(limit * 0.7)
+    tail = limit - head - 30
+    return text[:head] + "\n…[truncated for analysis]…\n" + text[-tail:]
 
 def analyze_blood_report(raw_text: str) -> Dict[str, Any]:
     """
@@ -57,8 +70,7 @@ You MUST return ONLY a raw JSON object with this exact schema:
 
 Be thorough. Extract EVERY test value you can find in the text. Do not skip any. If you cannot determine a reference range, use standard medical reference ranges."""
 
-        # Send the full text (GPT-4o-mini supports 128K context)
-        user_prompt = f"Here is the complete text extracted from a patient's blood test report PDF. Analyze it thoroughly:\n\n---BEGIN REPORT---\n{raw_text}\n---END REPORT---"
+        user_prompt = f"Here is the text extracted from a patient's blood test report PDF. Analyze it thoroughly:\n\n---BEGIN REPORT---\n{_truncate(raw_text)}\n---END REPORT---"
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -67,6 +79,7 @@ Be thorough. Extract EVERY test value you can find in the text. Do not skip any.
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.1,
+            max_tokens=1500,                       # bounded response → bounded latency
             response_format={"type": "json_object"}
         )
 
@@ -132,7 +145,7 @@ You MUST return ONLY a raw JSON object with this exact schema:
 For the `medicines` field, list every distinct medication or supplement mentioned in the prescription. Include the dosage if it appears right next to the name (e.g. 'Amoxicillin 500mg'). If no dosage is mentioned, just use the name. Do NOT include instructions like 'once daily' in the medicine name.
 Focus on clarity and providing actionable advice based on the prescribed medication."""
 
-        user_prompt = f"Here is the text extracted from the prescription:\n\n---BEGIN PRESCRIPTION---\n{raw_text}\n---END PRESCRIPTION---"
+        user_prompt = f"Here is the text extracted from the prescription:\n\n---BEGIN PRESCRIPTION---\n{_truncate(raw_text, 6000)}\n---END PRESCRIPTION---"
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -141,6 +154,7 @@ Focus on clarity and providing actionable advice based on the prescribed medicat
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.1,
+            max_tokens=900,
             response_format={"type": "json_object"}
         )
 

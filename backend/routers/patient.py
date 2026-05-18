@@ -135,16 +135,25 @@ def create_diagnostic_report(report_req: DiagnosticReportRequest):
 
 @router.post("/upload/blood-report")
 async def upload_blood_report(uid: str = Form(...), file: UploadFile = File(...)):
+    import time
     supabase   = get_supabase()
     file_bytes = await file.read()
     try:
+        t0 = time.perf_counter()
         safe_name = file.filename.replace(" ", "_")
         path      = f"blood_reports/{uid}/{safe_name}"
         supabase.storage.from_("medaxis").upload(path, file_bytes, {"content-type": file.content_type, "upsert": "true"})
         pdf_url = supabase.storage.from_("medaxis").get_public_url(path)
+        t_upload = time.perf_counter() - t0
 
-        raw_text   = extract_text_from_file(file_bytes, file.filename)
+        t1 = time.perf_counter()
+        raw_text = extract_text_from_file(file_bytes, file.filename)
+        t_extract = time.perf_counter() - t1
+
+        t2 = time.perf_counter()
         ai_summary = analyze_blood_report(raw_text)
+        t_ai = time.perf_counter() - t2
+        print(f"[upload-blood] {file.filename}: storage={t_upload:.1f}s  extract={t_extract:.1f}s  ai={t_ai:.1f}s")
 
         observations = []
         for val in ai_summary.get("all_values", []):
