@@ -40,6 +40,30 @@ def health_check():
     return {"status": "ok", "service": "MedAxis AI Backend"}
 
 
+# ─── Diagnostics ──────────────────────────────────────────────────────────────
+
+@app.get("/debug/env-check")
+def env_check():
+    """Lists which required env vars are SET (without revealing values)."""
+    import os
+    required = [
+        "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_JWT_SECRET",
+        "OPENAI_API_KEY", "EMAIL_SENDER", "EMAIL_APP_PASSWORD",
+    ]
+    return {var: ("set" if os.environ.get(var) else "MISSING") for var in required}
+
+
+@app.post("/debug/email-test")
+def email_test(to: str):
+    """
+    Send a real test OTP to the given address and return the actual SMTP result.
+    Hit it like: POST /debug/email-test?to=you@example.com
+    """
+    from routers.auth_helpers import send_email_otp
+    success, message = send_email_otp(to, "123456")
+    return {"success": success, "message": message}
+
+
 # ─── Auth Register ────────────────────────────────────────────────────────────
 
 from routers.auth_helpers import RegisterRequest, generate_unique_id, build_standard_user_doc, get_any_authenticated_uid, normalize_phone

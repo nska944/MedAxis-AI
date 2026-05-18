@@ -36,7 +36,6 @@ from routers.auth_helpers import (
     OTPGenerateRequest,
     OTPVerifyRequest,
     normalize_phone,
-    send_sms,
     send_email_otp,
     REWARD_TIERS,
 )
@@ -551,14 +550,11 @@ def generate_patient_otp(req: OTPGenerateRequest, background_tasks: BackgroundTa
 
         print(f"\n{'='*50}\n[LAYER 2] OTP for Patient {req.uid}: {otp_code}\n{'='*50}\n")
 
-        user_result = supabase.table("users").select("document, email, phone_number").eq("uid", req.uid).maybe_single().execute()
+        user_result = supabase.table("users").select("document, email").eq("uid", req.uid).maybe_single().execute()
         if user_result.data:
             row        = user_result.data
             data       = row.get("document") or {}
-            phone      = normalize_phone(row.get("phone_number") or data.get("phoneNumber", ""))
             user_email = row.get("email") or data.get("email")
-            if phone and len(phone) >= 10:
-                background_tasks.add_task(send_sms, phone, f"Your MedAxis AI OTP is: {otp_code}. Valid for 5 minutes.")
             if user_email:
                 background_tasks.add_task(send_email_otp, user_email, otp_code)
 

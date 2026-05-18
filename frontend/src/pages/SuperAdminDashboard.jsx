@@ -478,7 +478,7 @@ const SuperAdminDashboard = () => {
                 <Modal title="Confirm Delete" onClose={() => { setDeleteConfirm(null); setDeleteError(''); }}>
                     <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.95rem' }}>
                         Are you sure you want to permanently delete <strong style={{ color: 'var(--text-main)' }}>{deleteConfirm.name}</strong>?
-                        This will remove their Firebase account and all Firestore data. This action cannot be undone.
+                        This will remove their account and all associated medical records. This action cannot be undone.
                     </p>
                     {deleteError && <div style={{ color: '#ef4444', fontSize: '0.85rem', marginBottom: '1rem' }}>{deleteError}</div>}
                     <div style={{ display: 'flex', gap: '1rem' }}>

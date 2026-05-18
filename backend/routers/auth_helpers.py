@@ -108,42 +108,11 @@ def normalize_phone(phone: str) -> str:
     return digits[-10:] if len(digits) >= 10 else digits
 
 
-def send_sms(to_number: str, message: str):
-    import socket
-    from twilio.rest import Client
-
-    old_getaddrinfo = socket.getaddrinfo
-    def new_getaddrinfo(*args, **kwargs):
-        responses = old_getaddrinfo(*args, **kwargs)
-        return [r for r in responses if r[0] == socket.AF_INET]
-    socket.getaddrinfo = new_getaddrinfo
-
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth_token  = os.getenv("TWILIO_AUTH_TOKEN")
-    from_number = os.getenv("TWILIO_PHONE_NUMBER")
-
-    if not account_sid or not auth_token or not from_number:
-        print(f"ERROR: Twilio credentials missing. Message: {message}")
-        return False
-    try:
-        if len(to_number) == 10:
-            to_number = f"+91{to_number}"
-        client = Client(account_sid, auth_token, http_client=None)
-        # Twilio's default HTTP client has no timeout — set one so a stuck
-        # connection can't hang the worker indefinitely.
-        from twilio.http.http_client import TwilioHttpClient
-        client.http_client = TwilioHttpClient(timeout=10)
-        msg = client.messages.create(body=message, from_=from_number, to=to_number)
-        print(f"DEBUG: Twilio SMS sent. SID: {msg.sid}")
-        return True
-    except Exception as exc:
-        import traceback
-        print(f"ERROR: Twilio failed: {exc}")
-        traceback.print_exc()
-        return False
-
-
-def send_email_otp(to_email: str, otp_code: str):
+def send_email_otp(to_email: str, otp_code: str) -> tuple[bool, str]:
+    """
+    Send an OTP via Gmail SMTP. Returns (success, message) so callers can
+    surface real errors. Always logs to stdout for Render log inspection.
+    """
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
@@ -151,8 +120,9 @@ def send_email_otp(to_email: str, otp_code: str):
     sender_email    = os.getenv("EMAIL_SENDER")
     sender_password = os.getenv("EMAIL_APP_PASSWORD")
     if not sender_email or not sender_password:
-        print(f"ERROR: Email credentials missing. OTP {otp_code} for {to_email} not sent.")
-        return False
+        msg = f"EMAIL config missing (EMAIL_SENDER/EMAIL_APP_PASSWORD not set). OTP {otp_code} for {to_email} NOT sent."
+        print(f"ERROR: {msg}")
+        return (False, msg)
 
     message = MIMEMultipart("alternative")
     message["Subject"] = "MedAxis AI - Your Security OTP"
@@ -176,14 +146,20 @@ def send_email_otp(to_email: str, otp_code: str):
     message.attach(MIMEText(text, "plain"))
     message.attach(MIMEText(html, "html"))
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
             server.login(sender_email, sender_password)
             server.sendmail(sender_email, to_email, message.as_string())
-        print(f"DEBUG: Email OTP sent to {to_email}")
-        return True
+        ok_msg = f"Email OTP sent to {to_email} from {sender_email}"
+        print(f"DEBUG: {ok_msg}")
+        return (True, ok_msg)
+    except smtplib.SMTPAuthenticationError as exc:
+        err = f"Gmail SMTP auth failed for {sender_email} — check EMAIL_APP_PASSWORD (must be a 16-char Gmail App Password, not your login password). Detail: {exc}"
+        print(f"ERROR: {err}")
+        return (False, err)
     except Exception as exc:
-        print(f"ERROR: Failed to send email OTP: {exc}")
-        return False
+        err = f"Failed to send email OTP to {to_email}: {type(exc).__name__}: {exc}"
+        print(f"ERROR: {err}")
+        return (False, err)
 
 
 def generate_unique_id(supabase, field: str, prefix: str, length: int, digits_only: bool = False) -> str:

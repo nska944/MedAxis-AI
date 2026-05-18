@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabase/supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
-import { HeartPulse, CheckCircle, Camera, ShieldCheck } from 'lucide-react';
+import { Camera, ShieldCheck } from 'lucide-react';
 import * as faceapi from 'face-api.js';
 import Webcam from 'react-webcam';
 
@@ -26,10 +26,7 @@ const Login = () => {
     const [modelsLoaded, setModelsLoaded]             = useState(false);
     const webcamRef = React.useRef(null);
 
-    const [loginMethod, setLoginMethod] = useState('email');
-    const [phoneNumber, setPhoneNumber] = useState('');
     const [otp, setOtp]                 = useState('');
-    const [isOtpSent, setIsOtpSent]     = useState(false);
     const [resendTimer, setResendTimer] = useState(0);
 
     // Redirect once fully authenticated
@@ -199,70 +196,6 @@ const Login = () => {
         }
     };
 
-    // ── Phone OTP Login ───────────────────────────────────────────────────────
-    const handleSendOtp = async (e) => {
-        e.preventDefault();
-        setError('');
-        setIsSubmitting(true);
-        try {
-            const formatted = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
-            const res = await fetch(`${API_BASE_URL}/auth/phone/generate-otp`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phoneNumber: formatted }),
-            });
-            const d = await res.json();
-            if (!res.ok) throw new Error(d.detail || 'Failed to send OTP');
-            setIsOtpSent(true);
-            setResendTimer(30);
-        } catch (err) {
-            setError(err.message);
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
-
-    const handleVerifyOtp = async (e) => {
-        e.preventDefault();
-        if (!otp) return;
-        setError('');
-        setIsSubmitting(true);
-        try {
-            const formatted = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
-            const res = await fetch(`${API_BASE_URL}/auth/phone/verify-otp`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phoneNumber: formatted, otp }),
-            });
-            const d = await res.json();
-            if (!res.ok) throw new Error(d.detail || 'Invalid OTP');
-
-            // Backend mints a Supabase-compatible JWT — set it as the session
-            await supabase.auth.setSession({ access_token: d.access_token, refresh_token: '' });
-            const role = d.role;
-            setSelectedRole(role);
-
-            if (role === 'patient') {
-                const meRes = await fetch(`${API_BASE_URL}/patient/me`, {
-                    headers: { 'Authorization': `Bearer ${d.access_token}` },
-                });
-                if (meRes.ok) {
-                    const meData = await meRes.json();
-                    setStoredFaceDescriptor(meData.faceData || null);
-                }
-                setPatientUid(d.uid);
-                await generateBackendOTP(d.uid, d.access_token);
-                setAuthStep(2);
-            } else {
-                setAuthStep(4);
-            }
-        } catch (err) {
-            setError(err.message);
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
-
     return (
         <div className="auth-container">
             <div className="auth-form-wrapper glass-panel">
@@ -285,95 +218,35 @@ const Login = () => {
                 {error && <div className="error-msg">{error}</div>}
                 <div id="recaptcha-container"></div>
 
-                {/* STEP 1 — email / phone */}
+                {/* STEP 1 — email + password (with Google as alt) */}
                 {authStep === 1 && (
-                    <>
-                        {/* Login method tabs */}
-                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
-                            {['email', 'phone'].map(m => (
-                                <button key={m} type="button"
-                                    onClick={() => { setLoginMethod(m); setError(''); }}
-                                    style={{ flex: 1, padding: '0.6rem', borderRadius: '8px', border: '1px solid var(--border-color)',
-                                             background: loginMethod === m ? 'var(--primary)' : 'transparent',
-                                             color: loginMethod === m ? '#fff' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}>
-                                    {m.charAt(0).toUpperCase() + m.slice(1)}
-                                </button>
-                            ))}
+                    <form onSubmit={handleLogin}>
+                        <div className="form-group">
+                            <label className="form-label">Email address</label>
+                            <input type="email" className="form-input" value={email} onChange={e => setEmail(e.target.value)} required placeholder="you@example.com" />
                         </div>
-
-                        {loginMethod === 'email' && (
-                            <form onSubmit={handleLogin}>
-                                <div className="form-group">
-                                    <label className="form-label">Email Address</label>
-                                    <input type="email" className="form-input" value={email} onChange={e => setEmail(e.target.value)} required placeholder="doctor@medaxis.ai" />
-                                </div>
-                                <div className="form-group">
-                                    <label className="form-label">Password</label>
-                                    <input type="password" className="form-input" value={password} onChange={e => setPassword(e.target.value)} required placeholder="••••••••" />
-                                </div>
-                                <button type="submit" className="btn-primary" disabled={isSubmitting} style={{ marginTop: '0.5rem' }}>
-                                    {isSubmitting ? <span className="loader"></span> : 'Sign In'}
-                                </button>
-                                <div style={{ margin: '1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                    <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }}></div>
-                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>OR</span>
-                                    <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }}></div>
-                                </div>
-                                <button type="button" onClick={handleGoogleLogin} disabled={isSubmitting}
-                                    style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', background: 'white', color: '#1f2937',
-                                             border: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                             gap: '0.5rem', fontWeight: 600, cursor: 'pointer' }}>
-                                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style={{ width: '18px' }} />
-                                    Continue with Google
-                                </button>
-                            </form>
-                        )}
-
-                        {loginMethod === 'phone' && (
-                            <div>
-                                {!isOtpSent ? (
-                                    <form onSubmit={handleSendOtp}>
-                                        <div className="form-group">
-                                            <label className="form-label">Phone Number</label>
-                                            <input type="tel" className="form-input" value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} required placeholder="+91 99999 99999" />
-                                            <small style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>Include country code (e.g. +91)</small>
-                                        </div>
-                                        <button type="submit" className="btn-primary" disabled={isSubmitting}>
-                                            {isSubmitting ? <span className="loader"></span> : 'Send Verification Code'}
-                                        </button>
-                                    </form>
-                                ) : (
-                                    <form onSubmit={handleVerifyOtp}>
-                                        <div style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                                            <CheckCircle size={16} /> Code sent to {phoneNumber}
-                                        </div>
-                                        <div className="form-group">
-                                            <label className="form-label">6-Digit Code</label>
-                                            <input type="text" className="form-input" value={otp} onChange={e => setOtp(e.target.value)} required placeholder="123456" maxLength={6}
-                                                style={{ letterSpacing: '4px', textAlign: 'center', fontSize: '1.2rem', fontWeight: 600 }} />
-                                        </div>
-                                        <button type="submit" className="btn-primary" disabled={isSubmitting}>
-                                            {isSubmitting ? <span className="loader"></span> : 'Verify & Log In'}
-                                        </button>
-                                        <button type="button" onClick={() => setIsOtpSent(false)}
-                                            style={{ background: 'none', border: 'none', color: 'var(--primary)', width: '100%', marginTop: '1rem', cursor: 'pointer', fontSize: '0.9rem' }}>
-                                            Change Phone Number
-                                        </button>
-                                        <div style={{ textAlign: 'center', marginTop: '1rem' }}>
-                                            {resendTimer > 0 ? (
-                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Resend in {resendTimer}s</span>
-                                            ) : (
-                                                <button type="button" onClick={handleSendOtp}
-                                                    style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
-                                                    Resend Code
-                                                </button>
-                                            )}
-                                        </div>
-                                    </form>
-                                )}
-                            </div>
-                        )}
-                    </>
+                        <div className="form-group">
+                            <label className="form-label">Password</label>
+                            <input type="password" className="form-input" value={password} onChange={e => setPassword(e.target.value)} required placeholder="••••••••" />
+                        </div>
+                        <button type="submit" className="btn-primary" disabled={isSubmitting} style={{ marginTop: '0.5rem' }}>
+                            {isSubmitting ? <span className="loader"></span> : 'Sign in'}
+                        </button>
+                        <div style={{ margin: '1.75rem 0 1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                            <div style={{ flex: 1, height: '1px', background: 'var(--line)' }}></div>
+                            <span style={{ color: 'var(--ink-muted)', fontSize: '0.78rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>or</span>
+                            <div style={{ flex: 1, height: '1px', background: 'var(--line)' }}></div>
+                        </div>
+                        <button type="button" onClick={handleGoogleLogin} disabled={isSubmitting} className="btn-outline" style={{ width: '100%', padding: '0.7rem' }}>
+                            <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}>
+                                <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/>
+                                <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+                                <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
+                                <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
+                            </svg>
+                            Continue with Google
+                        </button>
+                    </form>
                 )}
 
                 {/* STEP 2 — OTP (patient layer 2) */}
@@ -383,7 +256,7 @@ const Login = () => {
                             <ShieldCheck size={16} /> Layer 1 Passed. Enter Security PIN.
                         </div>
                         <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-                            A security OTP has been sent to your registered phone/email.
+                            A security OTP has been sent to your registered email.
                         </p>
                         <div className="form-group">
                             <label className="form-label">6-Digit OTP</label>
