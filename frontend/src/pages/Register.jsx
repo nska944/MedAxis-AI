@@ -84,13 +84,12 @@ const Register = () => {
             }
 
             if (data.success) {
-                // Auto-sign in after successful registration
-                import('../supabase/supabaseClient').then(({ supabase }) => {
-                    supabase.auth.signInWithPassword({ email: formData.email, password: formData.password })
-                        .catch(err => {
-                            setError("Account created! Please sign in manually: " + err.message);
-                            setIsSubmitting(false);
-                        });
+                // Make sure no half-session lingers, then send them to the secure
+                // 3-layer login. (Patients must pass OTP + face before the dashboard.)
+                const { supabase } = await import('../supabase/supabaseClient');
+                await supabase.auth.signOut().catch(() => {});
+                navigate('/login', {
+                    state: { justRegistered: true, email: formData.email },
                 });
             }
         } catch (err) {

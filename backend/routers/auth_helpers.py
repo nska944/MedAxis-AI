@@ -244,9 +244,9 @@ def get_current_doctor_uid(credentials: HTTPAuthorizationCredentials = Depends(s
     uid = payload["sub"]
 
     # Verify doctor is affiliated with a hospital
-    from supabase_config import get_supabase, get_user_doc
+    from supabase_config import get_supabase, get_user_doc, maybe_one
     supabase = get_supabase()
-    result = supabase.table("users").select("document, hospital_id").eq("uid", uid).maybe_single().execute()
+    result = maybe_one(supabase.table("users").select("document, hospital_id").eq("uid", uid))
     if not result.data:
         raise HTTPException(status_code=403, detail="Doctor profile not found.")
     if not result.data.get("hospital_id"):

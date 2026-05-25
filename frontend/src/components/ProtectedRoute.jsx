@@ -3,7 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
-    const { currentUser, userRole, loading } = useAuth();
+    const { currentUser, userRole, loading, patientAuthStep } = useAuth();
 
     if (loading) {
         return (
@@ -29,7 +29,7 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
     }
 
     // Layer 2 & 3 Enforcement for Patients
-    if (userRole === 'patient' && useAuth().patientAuthStep < 4) {
+    if (userRole === 'patient' && patientAuthStep < 4) {
         console.warn("Blocking dashboard access: Patients must complete all 3 security layers.");
         return <Navigate to="/login" replace />;
     }

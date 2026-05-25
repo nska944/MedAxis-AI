@@ -16,6 +16,25 @@ def get_supabase() -> Client:
     return _client
 
 
+class _Row:
+    """Tiny shim so callers can keep using `.data` after maybe_one()."""
+    __slots__ = ("data",)
+    def __init__(self, data):
+        self.data = data
+
+
+def maybe_one(query):
+    """
+    Execute a query expecting 0 or 1 rows and ALWAYS return an object with `.data`
+    (the row dict, or None). Supabase-py's .maybe_single() returns None from
+    execute() on zero rows, which makes `result.data` raise AttributeError —
+    this avoids that footgun entirely.
+    """
+    res  = query.limit(1).execute()
+    rows = res.data or []
+    return _Row(rows[0] if rows else None)
+
+
 def get_user_doc(row: dict) -> dict | None:
     """
     Convert a Supabase users row to a flat Firestore-compatible dict.

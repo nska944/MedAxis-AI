@@ -3,7 +3,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from supabase_config import get_supabase
+from supabase_config import get_supabase, maybe_one
 from routers.auth_helpers import (
     get_current_doctor_uid,
     DoctorCommentRequest,
@@ -42,7 +42,7 @@ def get_doctor_reports(doctor_uid: str):
 
         all_reports = []
         for p_uid in patient_uids:
-            consent = supabase.table("consents").select("granted").eq("patient_uid", p_uid).eq("doctor_uid", doctor_uid).maybe_single().execute()
+            consent = maybe_one(supabase.table("consents").select("granted").eq("patient_uid", p_uid).eq("doctor_uid", doctor_uid))
             if not consent.data or not consent.data.get("granted"):
                 continue
 
@@ -71,7 +71,7 @@ def resolve_high_risk_alert(req: AlertResolveRequest):
     try:
         _assert_doctor_role(supabase, req.doctor_uid)
 
-        alert_res = supabase.table("alerts").select("id").eq("id", req.alert_id).maybe_single().execute()
+        alert_res = maybe_one(supabase.table("alerts").select("id").eq("id", req.alert_id))
         if not alert_res.data:
             raise HTTPException(status_code=404, detail="Alert not found.")
 
@@ -190,7 +190,7 @@ def get_patient_uploaded_prescriptions(patient_uid: str, doctor_uid: str = Depen
 def add_prescription_comment(req: PrescriptionCommentRequest, doctor_uid: str = Depends(get_current_doctor_uid)):
     supabase = get_supabase()
     try:
-        rx_res = supabase.table("fhir_prescriptions").select("document").eq("user_id", req.patient_uid).eq("id", req.prescription_id).maybe_single().execute()
+        rx_res = maybe_one(supabase.table("fhir_prescriptions").select("document").eq("user_id", req.patient_uid).eq("id", req.prescription_id))
         if not rx_res.data:
             raise HTTPException(status_code=404, detail="Prescription not found.")
 

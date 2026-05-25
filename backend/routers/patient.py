@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 
-from supabase_config import get_supabase, merge_user_doc
+from supabase_config import get_supabase, merge_user_doc, maybe_one
 from fhir_utils import (
     build_fhir_patient,
     calculate_bmi,
@@ -322,7 +322,7 @@ def log_steps(req: StepLogRequest, uid: str = Depends(get_current_patient_uid)):
     supabase = get_supabase()
     try:
         today  = datetime.utcnow().strftime("%Y-%m-%d")
-        result = supabase.table("step_rewards").select("*").eq("user_id", uid).maybe_single().execute()
+        result = maybe_one(supabase.table("step_rewards").select("*").eq("user_id", uid))
         data   = result.data or {"daily_steps": {}, "total_points": 0, "rewards_claimed": []}
 
         points = 0
@@ -377,7 +377,7 @@ def sync_steps(req: SyncStepsRequest, uid: str = Depends(get_current_patient_uid
         )
 
         today_str = now.strftime("%Y-%m-%d")
-        result    = supabase.table("step_rewards").select("*").eq("user_id", uid).maybe_single().execute()
+        result    = maybe_one(supabase.table("step_rewards").select("*").eq("user_id", uid))
         data      = result.data or {"daily_steps": {}, "total_points": 0, "rewards_claimed": []}
 
         prev_steps = data["daily_steps"].get(today_str, 0)
@@ -403,7 +403,7 @@ def sync_steps(req: SyncStepsRequest, uid: str = Depends(get_current_patient_uid
 def get_step_rewards(uid: str = Depends(get_current_patient_uid)):
     supabase = get_supabase()
     try:
-        result = supabase.table("step_rewards").select("*").eq("user_id", uid).maybe_single().execute()
+        result = maybe_one(supabase.table("step_rewards").select("*").eq("user_id", uid))
         if not result.data:
             return {"daily_steps": {}, "total_points": 0, "rewards_claimed": []}
         row = result.data
@@ -442,7 +442,7 @@ def update_checkup_date(req: CheckupDateRequest, uid: str = Depends(get_current_
 def get_patient_me(uid: str = Depends(get_current_patient_uid)):
     supabase = get_supabase()
     try:
-        result = supabase.table("users").select("document, uid, role, email").eq("uid", uid).maybe_single().execute()
+        result = maybe_one(supabase.table("users").select("document, uid, role, email").eq("uid", uid))
         if not result.data:
             raise HTTPException(status_code=404, detail="Patient profile not found.")
         row  = result.data
@@ -506,10 +506,10 @@ def lookup_patient_by_health_id(health_id: str, requester: dict = Depends(get_au
         matched_data.setdefault("email", row.get("email", ""))
 
         if requester_role == "doctor":
-            consent = supabase.table("consents").select("granted").eq("patient_uid", matched_uid).eq("doctor_uid", requester_uid).maybe_single().execute()
+            consent = maybe_one(supabase.table("consents").select("granted").eq("patient_uid", matched_uid).eq("doctor_uid", requester_uid))
             has_consent = consent.data and consent.data.get("granted") is True
 
-            assignment = supabase.table("doctor_assignments").select("status").eq("doctor_uid", requester_uid).eq("patient_uid", matched_uid).maybe_single().execute()
+            assignment = maybe_one(supabase.table("doctor_assignments").select("status").eq("doctor_uid", requester_uid).eq("patient_uid", matched_uid))
             has_assign  = assignment.data and assignment.data.get("status") == "active"
 
             if not has_consent and not has_assign:
@@ -559,7 +559,7 @@ def generate_patient_otp(req: OTPGenerateRequest, background_tasks: BackgroundTa
 
         print(f"\n{'='*50}\n[LAYER 2] OTP for Patient {req.uid}: {otp_code}\n{'='*50}\n")
 
-        user_result = supabase.table("users").select("document, email").eq("uid", req.uid).maybe_single().execute()
+        user_result = maybe_one(supabase.table("users").select("document, email").eq("uid", req.uid))
         if user_result.data:
             row        = user_result.data
             data       = row.get("document") or {}
@@ -576,7 +576,7 @@ def generate_patient_otp(req: OTPGenerateRequest, background_tasks: BackgroundTa
 def verify_patient_otp(req: OTPVerifyRequest):
     supabase = get_supabase()
     try:
-        result = supabase.table("login_otps").select("*").eq("uid", req.uid).maybe_single().execute()
+        result = maybe_one(supabase.table("login_otps").select("*").eq("uid", req.uid))
         if not result.data:
             raise HTTPException(status_code=400, detail="No active OTP found. Please request a new one.")
 
@@ -652,7 +652,7 @@ def get_family_members(uid: str = Depends(get_current_patient_uid)):
 def update_family_member(member_id: str, req: FamilyMemberRequest, uid: str = Depends(get_current_patient_uid)):
     supabase = get_supabase()
     try:
-        existing = supabase.table("family_members").select("document").eq("id", member_id).eq("patient_uid", uid).maybe_single().execute()
+        existing = maybe_one(supabase.table("family_members").select("document").eq("id", member_id).eq("patient_uid", uid))
         doc = dict((existing.data or {}).get("document") or {})
         doc.update({
             "name":            req.name,

@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabase/supabaseClient';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate, Link } from 'react-router-dom';
-import { Camera, ShieldCheck } from 'lucide-react';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
+import { Camera, ShieldCheck, CheckCircle2 } from 'lucide-react';
 import * as faceapi from 'face-api.js';
 import Webcam from 'react-webcam';
 
 const Login = () => {
-    const [email, setEmail]       = useState('');
+    const location = useLocation();
+    const justRegistered = location.state?.justRegistered;
+    const [email, setEmail]       = useState(location.state?.email || '');
     const [password, setPassword] = useState('');
     const [error, setError]       = useState('');
+    const [notice, setNotice]     = useState(justRegistered ? 'Account created. Sign in to continue.' : '');
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
@@ -215,6 +218,15 @@ const Login = () => {
                     {authStep === 1 ? 'Sign in to MedAxis AI' : `Log in as ${selectedRole?.charAt(0).toUpperCase() + selectedRole?.slice(1)}`}
                 </p>
 
+                {notice && !error && (
+                    <div style={{
+                        background: 'var(--success-soft)', border: '1px solid rgba(91,111,73,0.25)',
+                        color: 'var(--sage-deep)', padding: '0.7rem 0.95rem', borderRadius: 'var(--radius-md)',
+                        marginBottom: '1rem', fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '0.5rem'
+                    }}>
+                        <CheckCircle2 size={16} /> {notice}
+                    </div>
+                )}
                 {error && <div className="error-msg">{error}</div>}
                 <div id="recaptcha-container"></div>
 

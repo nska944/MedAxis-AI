@@ -3,7 +3,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from supabase_config import get_supabase, build_user_row
+from supabase_config import get_supabase, build_user_row, maybe_one
 from routers.auth_helpers import (
     get_current_hospital_uid,
     RoleAssignRequest,
@@ -20,7 +20,7 @@ router = APIRouter()
 def hospital_create_doctor(req: CreateDoctorRequest, hospital_uid: str = Depends(get_current_hospital_uid)):
     supabase = get_supabase()
     try:
-        hosp_res  = supabase.table("users").select("hospital_id, document").eq("uid", hospital_uid).maybe_single().execute()
+        hosp_res  = maybe_one(supabase.table("users").select("hospital_id, document").eq("uid", hospital_uid))
         hosp_data = (hosp_res.data or {}).get("document") or {}
         hospital_id = (hosp_res.data or {}).get("hospital_id") or hosp_data.get("hospitalId", "")
         if not hospital_id:
@@ -74,7 +74,7 @@ def hospital_create_doctor(req: CreateDoctorRequest, hospital_uid: str = Depends
 def get_hospital_doctors(uid: str = Depends(get_current_hospital_uid)):
     supabase = get_supabase()
     try:
-        hosp_res  = supabase.table("users").select("hospital_id").eq("uid", uid).maybe_single().execute()
+        hosp_res  = maybe_one(supabase.table("users").select("hospital_id").eq("uid", uid))
         hospital_id = (hosp_res.data or {}).get("hospital_id", "")
         if not hospital_id:
             raise HTTPException(status_code=403, detail="Hospital account is incomplete (missing hospitalId).")
@@ -105,7 +105,7 @@ def get_hospital_doctors(uid: str = Depends(get_current_hospital_uid)):
 def get_hospital_patients(uid: str = Depends(get_current_hospital_uid)):
     supabase = get_supabase()
     try:
-        hosp_res  = supabase.table("users").select("hospital_id").eq("uid", uid).maybe_single().execute()
+        hosp_res  = maybe_one(supabase.table("users").select("hospital_id").eq("uid", uid))
         hospital_id = (hosp_res.data or {}).get("hospital_id", "")
         if not hospital_id:
             raise HTTPException(status_code=403, detail="Hospital account is incomplete (missing hospitalId).")
@@ -121,7 +121,7 @@ def get_hospital_patients(uid: str = Depends(get_current_hospital_uid)):
 
         patients = []
         for p_uid in patient_uid_set:
-            p_res = supabase.table("users").select("uid, email, document").eq("uid", p_uid).maybe_single().execute()
+            p_res = maybe_one(supabase.table("users").select("uid, email, document").eq("uid", p_uid))
             if p_res.data:
                 p_data = p_res.data.get("document") or {}
                 patients.append({
@@ -141,7 +141,7 @@ def get_hospital_patients(uid: str = Depends(get_current_hospital_uid)):
 def get_hospital_stats(uid: str = Depends(get_current_hospital_uid)):
     supabase = get_supabase()
     try:
-        hosp_res  = supabase.table("users").select("hospital_id").eq("uid", uid).maybe_single().execute()
+        hosp_res  = maybe_one(supabase.table("users").select("hospital_id").eq("uid", uid))
         hospital_id = (hosp_res.data or {}).get("hospital_id", "")
         if not hospital_id:
             raise HTTPException(status_code=403, detail="Hospital account is incomplete (missing hospitalId).")
@@ -190,15 +190,15 @@ def assign_patient_to_doctor(req: PatientAssignRequest, uid: str = Depends(get_c
         raise HTTPException(status_code=400, detail="Mismatched assigner ID.")
     try:
         # Verify doctor is affiliated with this hospital
-        doc_res     = supabase.table("users").select("uid, hospital_id").eq("uid", req.doctor_uid).eq("role", "doctor").maybe_single().execute()
-        hosp_res    = supabase.table("users").select("hospital_id").eq("uid", uid).maybe_single().execute()
+        doc_res     = maybe_one(supabase.table("users").select("uid, hospital_id").eq("uid", req.doctor_uid).eq("role", "doctor"))
+        hosp_res    = maybe_one(supabase.table("users").select("hospital_id").eq("uid", uid))
         if not doc_res.data:
             raise HTTPException(status_code=404, detail="Doctor not found.")
         if doc_res.data.get("hospital_id") != (hosp_res.data or {}).get("hospital_id"):
             raise HTTPException(status_code=403, detail="Doctor is not affiliated with your hospital.")
 
         # Verify patient exists
-        pat_res = supabase.table("users").select("uid").eq("uid", req.patient_uid).maybe_single().execute()
+        pat_res = maybe_one(supabase.table("users").select("uid").eq("uid", req.patient_uid))
         if not pat_res.data:
             raise HTTPException(status_code=404, detail="Patient not found.")
 

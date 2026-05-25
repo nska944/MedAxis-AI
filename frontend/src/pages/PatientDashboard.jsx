@@ -86,9 +86,9 @@ const PatientDashboard = () => {
 
                         const code = obs?.code?.coding?.[0]?.code;
                         const val = obs?.valueQuantity?.value;
-                        if (code === "39156-5") mappedData[dateStr].BMI = val;
-                        if (code === "8867-4") mappedData[dateStr].heartRate = val;
-                        if (code === "2708-6") mappedData[dateStr].oxygen = val;
+                        if (code === "39156-5") mappedData[dateStr].BMI = val;          // Body Mass Index
+                        if (code === "8867-4")  mappedData[dateStr].heartRate = val;    // Heart rate
+                        if (code === "59408-5") mappedData[dateStr].oxygen = val;       // Oxygen saturation (matches backend)
                     });
                     const trendArray = Object.values(mappedData).sort((a, b) => a.timestamp - b.timestamp);
                     setBmiData(trendArray);
@@ -184,6 +184,28 @@ const PatientDashboard = () => {
         } catch (err) { setError(err.message); } finally { setLoading(false); }
     };
 
+    const refreshVitals = async () => {
+        try {
+            const token = await currentUser.getIdToken();
+            const res = await fetch(`${FASTAPI_URL}/patient/vitals`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const vitalsData = await res.json();
+            if (res.ok && vitalsData.vitals) {
+                const mappedData = {};
+                vitalsData.vitals.forEach(obs => {
+                    const dateStr = new Date(obs.effectiveDateTime).toLocaleDateString();
+                    const timeMs  = new Date(obs.effectiveDateTime).getTime();
+                    if (!mappedData[dateStr]) mappedData[dateStr] = { date: dateStr, timestamp: timeMs };
+                    const code = obs?.code?.coding?.[0]?.code;
+                    const val  = obs?.valueQuantity?.value;
+                    if (code === "39156-5") mappedData[dateStr].BMI = val;
+                    if (code === "8867-4")  mappedData[dateStr].heartRate = val;
+                    if (code === "59408-5") mappedData[dateStr].oxygen = val;
+                });
+                setBmiData(Object.values(mappedData).sort((a, b) => a.timestamp - b.timestamp));
+            }
+        } catch (err) { console.error('refreshVitals failed:', err); }
+    };
+
     const submitVitals = async (e) => {
         e.preventDefault(); setLoading(true); setError(null);
         try {
@@ -198,6 +220,8 @@ const PatientDashboard = () => {
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || 'Failed');
             setResults(p => ({ ...p, vitals: data.data }));
+            await refreshVitals();                 // refresh chart immediately
+            setActiveTab('trends');                // take them to the chart
         } catch (err) { setError(err.message); } finally { setLoading(false); }
     };
 
@@ -671,11 +695,11 @@ const PatientDashboard = () => {
                                     <h4 style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>Recent History</h4>
                                     <ResponsiveContainer width="100%" height={200}>
                                         <BarChart data={Object.entries(stepRewards.daily_steps).sort((a, b) => a[0].localeCompare(b[0])).slice(-7).map(([date, steps]) => ({ date: date.substring(5), steps }))}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                                            <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
                                             <XAxis dataKey="date" stroke="var(--text-dim)" fontSize={11} />
                                             <YAxis stroke="var(--text-dim)" fontSize={11} />
                                             <Tooltip contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '8px', fontSize: '0.85rem' }} />
-                                            <Bar dataKey="steps" fill="var(--warning)" radius={[4, 4, 0, 0]} />
+                                            <Bar dataKey="steps" fill="var(--terracotta)" radius={[4, 4, 0, 0]} />
                                         </BarChart>
                                     </ResponsiveContainer>
                                 </div>
@@ -692,13 +716,13 @@ const PatientDashboard = () => {
                                     <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>BMI Over Time</h4>
                                     <ResponsiveContainer width="100%" height={300}>
                                         <LineChart data={bmiData}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                                            <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
                                             <XAxis dataKey="date" stroke="var(--text-dim)" fontSize={11} />
                                             <YAxis yAxisId="left" stroke="var(--text-dim)" fontSize={11} domain={['auto', 'auto']} />
                                             <YAxis yAxisId="right" orientation="right" stroke="var(--text-dim)" fontSize={11} domain={['auto', 'auto']} />
                                             <Tooltip contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
                                             <Line yAxisId="left" type="monotone" dataKey="BMI" stroke="var(--primary)" strokeWidth={2} dot={{ fill: 'var(--primary)', r: 4 }} name="BMI" />
-                                            <Line yAxisId="left" type="monotone" dataKey="heartRate" stroke="var(--warning)" strokeWidth={2} dot={{ fill: 'var(--warning)', r: 4 }} name="Heart Rate (bpm)" />
+                                            <Line yAxisId="left" type="monotone" dataKey="heartRate" stroke="var(--terracotta)" strokeWidth={2} dot={{ fill: 'var(--terracotta)', r: 4 }} name="Heart Rate (bpm)" />
                                             <Line yAxisId="right" type="monotone" dataKey="oxygen" stroke="var(--accent)" strokeWidth={2} dot={{ fill: 'var(--accent)', r: 4 }} name="Oxygen (%)" />
                                         </LineChart>
                                     </ResponsiveContainer>
