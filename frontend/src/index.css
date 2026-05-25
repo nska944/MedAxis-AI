@@ -6,74 +6,79 @@
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..700,0..100&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
 :root {
-    /* Surfaces */
-    --bg-app:        #FBF8F1;
-    --bg-paper:      #FFFFFF;
-    --bg-elevated:   #F4F0E6;
-    --bg-sunken:     #EFEADD;
-    --bg-card:       #FFFFFF;
-    --bg-card-hover: #FCFAF3;
-    --input-bg:      #FFFFFF;
-    --sidebar-bg:    #FBF8F1;
-    --bg-overlay:    rgba(20, 18, 14, 0.04);
+    /* ── Clinical White + Indigo ──────────────────────────────────────────
+       Variable NAMES are kept (--sage = primary, --terracotta = warn, etc.)
+       so no component needs editing — only the VALUES change. */
 
-    /* Ink */
-    --ink:           #181613;
-    --ink-secondary: #3A352E;
-    --ink-muted:     #6F6A60;
-    --ink-dim:       #A39E91;
+    /* Surfaces — crisp cool white */
+    --bg-app:        #FBFCFD;
+    --bg-paper:      #FFFFFF;
+    --bg-elevated:   #F2F5F9;
+    --bg-sunken:     #EAEEF4;
+    --bg-card:       #FFFFFF;
+    --bg-card-hover: #F7F9FC;
+    --input-bg:      #FFFFFF;
+    --sidebar-bg:    #FBFCFD;
+    --bg-overlay:    rgba(27, 34, 48, 0.04);
+
+    /* Ink — slate-navy */
+    --ink:           #1B2230;
+    --ink-secondary: #3A4252;
+    --ink-muted:     #5B6472;
+    --ink-dim:       #9AA2B0;
     --text-main:     var(--ink);
     --text-muted:    var(--ink-muted);
     --text-dim:      var(--ink-dim);
 
     /* Lines */
-    --line:          rgba(24, 22, 19, 0.10);
-    --line-strong:   rgba(24, 22, 19, 0.18);
+    --line:          rgba(27, 34, 48, 0.10);
+    --line-strong:   rgba(27, 34, 48, 0.18);
     --border-color:  var(--line);
-    --border-glow:   rgba(91, 111, 73, 0.30);
+    --border-glow:   rgba(61, 78, 172, 0.30);
 
-    /* Accents */
-    --sage:          #5B6F49;
-    --sage-deep:     #3F4F33;
-    --sage-soft:     #E6ECDC;
-    --sage-tint:     rgba(91, 111, 73, 0.10);
+    /* Primary = deep indigo (kept under --sage* names) */
+    --sage:          #3D4EAC;
+    --sage-deep:     #2E3C86;
+    --sage-soft:     #E7E9F6;
+    --sage-tint:     rgba(61, 78, 172, 0.10);
 
-    --terracotta:    #C77536;        /* warm accent */
-    --terracotta-deep: #A65A20;
-    --terracotta-soft: #FBE7D3;
+    /* Warning = amber (kept under --terracotta* names) */
+    --terracotta:      #D98324;
+    --terracotta-deep: #B56A14;
+    --terracotta-soft: #FBEBD3;
 
-    --rose:          #B45970;        /* secondary warm */
-    --rose-soft:     #F7E1E5;
-
-    --indigo:        #4F5D9E;        /* cool accent for data viz */
-    --indigo-soft:   #E4E7F2;
-
-    --gold:          #C49A2F;        /* highlights / awards */
-    --gold-soft:     #F6EBC9;
+    /* Secondary accents */
+    --rose:          #C24A6B;
+    --rose-soft:     #F8E2E8;
+    --indigo:        #3D4EAC;        /* data-viz primary line */
+    --indigo-soft:   #E7E9F6;
+    --gold:          #C99A2E;
+    --gold-soft:     #F6ECCB;
 
     --primary:       var(--sage);
     --primary-hover: var(--sage-deep);
-    --primary-glow:  rgba(91, 111, 73, 0.15);
-    --accent:        var(--terracotta);
+    --primary-glow:  rgba(61, 78, 172, 0.15);
+    --accent:        #0E9F8E;        /* teal accent / highlights */
 
-    --success:       #5B6F49;
-    --success-soft:  #E6ECDC;
+    /* Success = teal */
+    --success:       #0E9F8E;
+    --success-soft:  #D6F2EE;
     --warning:       var(--terracotta);
     --warning-soft:  var(--terracotta-soft);
-    --danger:        #B8493D;
-    --danger-soft:   #F6E0DC;
+    --danger:        #D2453B;
+    --danger-soft:   #FBE3E1;
 
-    /* Soft chromatic glow used by hero / cards (subtle, not gradient buttons) */
-    --aurora-1: radial-gradient(ellipse 70% 45% at 15% 5%, rgba(199, 117, 54, 0.10), transparent 60%);
-    --aurora-2: radial-gradient(ellipse 60% 45% at 92% 8%, rgba(91, 111, 73, 0.10), transparent 60%);
-    --aurora-3: radial-gradient(ellipse 55% 35% at 50% 95%, rgba(79, 93, 158, 0.06), transparent 60%);
+    /* Soft chromatic glow — indigo/teal */
+    --aurora-1: radial-gradient(ellipse 70% 45% at 15% 5%, rgba(61, 78, 172, 0.07), transparent 60%);
+    --aurora-2: radial-gradient(ellipse 60% 45% at 92% 8%, rgba(14, 159, 142, 0.06), transparent 60%);
+    --aurora-3: radial-gradient(ellipse 55% 35% at 50% 95%, rgba(61, 78, 172, 0.05), transparent 60%);
 
-    /* Shadows */
-    --shadow-xs: 0 1px 1px rgba(24, 22, 19, 0.04);
-    --shadow-sm: 0 1px 2px rgba(24, 22, 19, 0.05), 0 0 0 1px rgba(24, 22, 19, 0.025);
-    --shadow-md: 0 6px 18px -4px rgba(24, 22, 19, 0.08), 0 2px 4px rgba(24, 22, 19, 0.04);
-    --shadow-lg: 0 18px 40px -8px rgba(24, 22, 19, 0.12), 0 4px 10px rgba(24, 22, 19, 0.05);
-    --shadow-lift: 0 12px 28px -6px rgba(91, 111, 73, 0.16);
+    /* Shadows (slate-tinted) */
+    --shadow-xs: 0 1px 1px rgba(27, 34, 48, 0.04);
+    --shadow-sm: 0 1px 2px rgba(27, 34, 48, 0.06), 0 0 0 1px rgba(27, 34, 48, 0.03);
+    --shadow-md: 0 6px 18px -4px rgba(27, 34, 48, 0.10), 0 2px 4px rgba(27, 34, 48, 0.05);
+    --shadow-lg: 0 18px 40px -8px rgba(27, 34, 48, 0.14), 0 4px 10px rgba(27, 34, 48, 0.06);
+    --shadow-lift: 0 12px 28px -6px rgba(61, 78, 172, 0.18);
     --shadow-glow: 0 0 0 4px var(--sage-tint);
 
     --radius-sm: 5px;
@@ -89,49 +94,54 @@
     --glass-effect:    none;
 }
 
-/* ── Dark Mode — same family, deeper canvas ──────────────────────────── */
+/* ── Dark Mode — slate-navy canvas, indigo/teal accents ──────────────── */
 [data-theme="dark"] {
-    --bg-app:        #14120F;
-    --bg-paper:      #1C1A16;
-    --bg-elevated:   #232017;
-    --bg-sunken:     #0E0D0B;
-    --bg-card:       #1C1A16;
-    --bg-card-hover: #232017;
-    --input-bg:      #1C1A16;
-    --sidebar-bg:    #14120F;
-    --bg-overlay:    rgba(255, 250, 235, 0.04);
+    --bg-app:        #0D1017;
+    --bg-paper:      #151A24;
+    --bg-elevated:   #1C2230;
+    --bg-sunken:     #090B11;
+    --bg-card:       #151A24;
+    --bg-card-hover: #1C2230;
+    --input-bg:      #151A24;
+    --sidebar-bg:    #0D1017;
+    --bg-overlay:    rgba(231, 236, 245, 0.04);
 
-    --ink:           #F0EBE0;
-    --ink-secondary: #D2CCC0;
-    --ink-muted:     #908A7E;
-    --ink-dim:       #5A554D;
+    --ink:           #E9EDF4;
+    --ink-secondary: #C2C9D6;
+    --ink-muted:     #8A93A4;
+    --ink-dim:       #565E6E;
 
-    --line:          rgba(240, 235, 224, 0.10);
-    --line-strong:   rgba(240, 235, 224, 0.20);
+    --line:          rgba(231, 236, 245, 0.10);
+    --line-strong:   rgba(231, 236, 245, 0.20);
 
-    --sage:          #9BAF87;
-    --sage-deep:     #B8C9A6;
-    --sage-soft:     rgba(155, 175, 135, 0.14);
-    --sage-tint:     rgba(155, 175, 135, 0.18);
+    --sage:          #8A97E8;        /* lighter indigo for dark bg */
+    --sage-deep:     #A6B1F0;
+    --sage-soft:     rgba(138, 151, 232, 0.14);
+    --sage-tint:     rgba(138, 151, 232, 0.18);
 
-    --terracotta:    #DD9162;
-    --terracotta-deep: #E9A87C;
-    --terracotta-soft: rgba(221, 145, 98, 0.14);
+    --terracotta:      #E5A155;
+    --terracotta-deep: #EFB779;
+    --terracotta-soft: rgba(229, 161, 85, 0.14);
 
-    --rose:          #D08AA0;
-    --rose-soft:     rgba(208, 138, 160, 0.14);
-    --indigo:        #8A98D8;
-    --indigo-soft:   rgba(138, 152, 216, 0.14);
+    --rose:          #DB8AA0;
+    --rose-soft:     rgba(219, 138, 160, 0.14);
+    --indigo:        #8A97E8;
+    --indigo-soft:   rgba(138, 151, 232, 0.14);
     --gold:          #D9B354;
     --gold-soft:     rgba(217, 179, 84, 0.14);
 
     --primary:       var(--sage);
     --primary-hover: var(--sage-deep);
-    --primary-glow:  rgba(155, 175, 135, 0.20);
+    --primary-glow:  rgba(138, 151, 232, 0.22);
+    --accent:        #2DD4BF;        /* teal */
+    --success:       #2DD4BF;
+    --success-soft:  rgba(45, 212, 191, 0.14);
+    --danger:        #F0655B;
+    --danger-soft:   rgba(240, 101, 91, 0.14);
 
-    --aurora-1: radial-gradient(ellipse 70% 45% at 15% 5%, rgba(221, 145, 98, 0.10), transparent 60%);
-    --aurora-2: radial-gradient(ellipse 60% 45% at 92% 8%, rgba(155, 175, 135, 0.10), transparent 60%);
-    --aurora-3: radial-gradient(ellipse 55% 35% at 50% 95%, rgba(138, 152, 216, 0.08), transparent 60%);
+    --aurora-1: radial-gradient(ellipse 70% 45% at 15% 5%, rgba(138, 151, 232, 0.10), transparent 60%);
+    --aurora-2: radial-gradient(ellipse 60% 45% at 92% 8%, rgba(45, 212, 191, 0.08), transparent 60%);
+    --aurora-3: radial-gradient(ellipse 55% 35% at 50% 95%, rgba(138, 151, 232, 0.07), transparent 60%);
 
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.4);
@@ -318,9 +328,9 @@ code, pre, .mono {
     gap: 0.5rem;
     width: 100%;
     padding: 0.8rem 1.5rem;
-    background: var(--ink);
-    color: var(--bg-paper);
-    border: 1px solid var(--ink);
+    background: var(--sage);              /* indigo primary */
+    color: #FFFFFF;
+    border: 1px solid var(--sage);
     border-radius: var(--radius-md);
     font-family: 'Inter', sans-serif;
     font-size: 0.94rem;
@@ -332,10 +342,10 @@ code, pre, .mono {
     overflow: hidden;
 }
 .btn-primary::after {
-    /* Sage sweep on hover */
+    /* Light sheen sweep on hover */
     content: '';
     position: absolute; inset: 0;
-    background: linear-gradient(120deg, transparent, var(--sage) 50%, transparent);
+    background: linear-gradient(120deg, transparent, rgba(255,255,255,0.5) 50%, transparent);
     opacity: 0;
     transform: translateX(-100%);
     transition: transform 600ms var(--ease-soft), opacity 200ms ease;
@@ -347,7 +357,7 @@ code, pre, .mono {
     transform: translateY(-1px);
 }
 .btn-primary:hover::after {
-    opacity: 0.20;
+    opacity: 0.18;
     transform: translateX(100%);
 }
 .btn-primary:active { transform: translateY(0) scale(0.985); }
