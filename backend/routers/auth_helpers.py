@@ -138,6 +138,40 @@ def _build_otp_email(to_email: str, otp_code: str, sender_email: str):
     return message, text, html
 
 
+def _send_via_brevo(to_email: str, otp_code: str) -> tuple[bool, str] | None:
+    """
+    Send via Brevo (Sendinblue) HTTPS API. Free tier = 300 emails/day to ANY
+    recipient after verifying a single sender email (no domain needed).
+    Returns None if BREVO_API_KEY isn't set so caller can fall back.
+    """
+    import requests
+    api_key = os.getenv("BREVO_API_KEY")
+    if not api_key:
+        return None
+    sender = os.getenv("BREVO_SENDER") or os.getenv("EMAIL_SENDER")
+    if not sender:
+        return (False, "BREVO_SENDER (or EMAIL_SENDER) not set — needs your verified Brevo sender address.")
+    _, text, html = _build_otp_email(to_email, otp_code, sender)
+    try:
+        resp = requests.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={"api-key": api_key, "Content-Type": "application/json", "accept": "application/json"},
+            json={
+                "sender":      {"name": "MedAxis AI", "email": sender},
+                "to":          [{"email": to_email}],
+                "subject":     "MedAxis AI - Your Security OTP",
+                "htmlContent": html,
+                "textContent": text,
+            },
+            timeout=15,
+        )
+        if resp.status_code in (200, 201, 202):
+            return (True, f"Email OTP sent to {to_email} via Brevo (id={resp.json().get('messageId','?')})")
+        return (False, f"Brevo rejected request: HTTP {resp.status_code} — {resp.text[:200]}")
+    except Exception as exc:
+        return (False, f"Brevo call failed: {type(exc).__name__}: {exc}")
+
+
 def _send_via_resend(to_email: str, otp_code: str) -> tuple[bool, str] | None:
     """
     Send via Resend HTTPS API. Works on Render free tier (SMTP is blocked).
@@ -171,22 +205,31 @@ def _send_via_resend(to_email: str, otp_code: str) -> tuple[bool, str] | None:
 
 def send_email_otp(to_email: str, otp_code: str) -> tuple[bool, str]:
     """
-    Send an OTP email. Prefers Resend (HTTPS API) since Render Free blocks SMTP;
-    falls back to Gmail SMTP if RESEND_API_KEY isn't set.
+    Send an OTP email. Backend priority:
+      1. Brevo  — free tier sends to ANY recipient (only a verified sender email needed)
+      2. Resend — HTTPS, but free tier only sends to your own address without a domain
+      3. Gmail SMTP — local/self-hosted only (Render Free blocks SMTP)
     """
-    # 1. Try Resend (HTTPS — works on Render free)
+    # 1. Brevo (best for multi-recipient on free tier)
+    brevo_result = _send_via_brevo(to_email, otp_code)
+    if brevo_result is not None:
+        ok, message = brevo_result
+        print(f"{'DEBUG' if ok else 'ERROR'}: {message}")
+        return brevo_result
+
+    # 2. Resend
     resend_result = _send_via_resend(to_email, otp_code)
     if resend_result is not None:
         ok, message = resend_result
         print(f"{'DEBUG' if ok else 'ERROR'}: {message}")
         return resend_result
 
-    # 2. Fall back to Gmail SMTP (works locally, not on Render free)
+    # 3. Gmail SMTP (works locally, not on Render free)
     import smtplib
     sender_email    = os.getenv("EMAIL_SENDER")
     sender_password = os.getenv("EMAIL_APP_PASSWORD")
     if not sender_email or not sender_password:
-        msg = f"No email backend configured. Set RESEND_API_KEY (recommended) or EMAIL_SENDER+EMAIL_APP_PASSWORD. OTP {otp_code} for {to_email} NOT sent."
+        msg = f"No email backend configured. Set BREVO_API_KEY (recommended) or RESEND_API_KEY. OTP {otp_code} for {to_email} NOT sent."
         print(f"ERROR: {msg}")
         return (False, msg)
 
