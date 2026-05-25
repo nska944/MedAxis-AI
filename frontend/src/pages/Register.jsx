@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { HeartPulse } from 'lucide-react';
 import ProfileImageUpload from '../components/ProfileImageUpload';
+import { supabase } from '../supabase/supabaseClient';
 const Register = () => {
     const [formData, setFormData] = useState({
         name: '',
@@ -86,7 +87,6 @@ const Register = () => {
             if (data.success) {
                 // Make sure no half-session lingers, then send them to the secure
                 // 3-layer login. (Patients must pass OTP + face before the dashboard.)
-                const { supabase } = await import('../supabase/supabaseClient');
                 await supabase.auth.signOut().catch(() => {});
                 navigate('/login', {
                     state: { justRegistered: true, email: formData.email },
