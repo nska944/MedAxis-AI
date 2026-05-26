@@ -185,6 +185,14 @@ export const DoctorDashboard = () => {
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || 'Not found');
+
+            // Access not yet granted → backend created a pending request
+            if (data.access_requested) {
+                setSearchResult(null);
+                setSearchError(`🔔 ${data.message}`);
+                return;
+            }
+
             setSearchResult(data);
 
             // Also fetch patient-uploaded prescriptions (with AI analysis)

@@ -47,6 +47,7 @@ const PatientDashboard = () => {
 
     const [doctors, setDoctors] = useState([]);
     const [consents, setConsents] = useState([]);
+    const [accessRequests, setAccessRequests] = useState([]);
     const [fetchingDoctors, setFetchingDoctors] = useState(false);
     const [idToken, setIdToken] = useState('');
     const [lastCheckupDate, setLastCheckupDate] = useState('');
@@ -128,9 +129,10 @@ const PatientDashboard = () => {
             try {
                 const token = await currentUser.getIdToken();
                 const headers = { 'Authorization': `Bearer ${token}` };
-                const [docRes, conRes] = await Promise.all([
+                const [docRes, conRes, reqRes] = await Promise.all([
                     fetch(`${FASTAPI_URL}/patient/doctors`, { headers }),
-                    fetch(`${FASTAPI_URL}/patient/consents`, { headers })
+                    fetch(`${FASTAPI_URL}/patient/consents`, { headers }),
+                    fetch(`${FASTAPI_URL}/patient/access-requests`, { headers })
                 ]);
                 if (docRes.ok) {
                     const data = await docRes.json();
@@ -140,11 +142,31 @@ const PatientDashboard = () => {
                     const data = await conRes.json();
                     setConsents(data.consents || []);
                 }
+                if (reqRes.ok) {
+                    const data = await reqRes.json();
+                    setAccessRequests(data.requests || []);
+                }
             } catch (e) { console.error("Error fetching doctors", e); }
             finally { setFetchingDoctors(false); }
         };
         fetchDoctorsAndConsents();
     }, [currentUser]);
+
+    const respondToRequest = async (doctorUid, approve) => {
+        try {
+            const token = await currentUser.getIdToken();
+            const endpoint = approve ? "grant-consent" : "deny-request";
+            const res = await fetch(`${FASTAPI_URL}/patient/${endpoint}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+                body: JSON.stringify({ doctor_uid: doctorUid })
+            });
+            if (res.ok) {
+                setAccessRequests(prev => prev.filter(r => r.doctor_uid !== doctorUid));
+                if (approve) setConsents(prev => [...new Set([...prev, doctorUid])]);
+            }
+        } catch (e) { console.error("Error responding to request:", e); }
+    };
 
     const getGreeting = () => {
         const hour = new Date().getHours();
@@ -783,6 +805,35 @@ const PatientDashboard = () => {
                             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
                                 Manage which doctors have access to your health records and diagnostic reports.
                             </p>
+
+                            {/* Pending access requests */}
+                            {accessRequests.length > 0 && (
+                                <div style={{ marginBottom: '2rem' }}>
+                                    <h4 style={{ fontSize: '0.95rem', marginBottom: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <Bell size={16} color="var(--warning)" /> Pending Access Requests
+                                        <span style={{ background: 'var(--warning-soft)', color: 'var(--warning)', borderRadius: '999px', padding: '0.05rem 0.5rem', fontSize: '0.72rem', fontWeight: 600 }}>{accessRequests.length}</span>
+                                    </h4>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                        {accessRequests.map(req => (
+                                            <div key={req.doctor_uid} style={{ background: 'var(--warning-soft)', border: '1px solid var(--warning)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                    <div style={{ width: 38, height: 38, borderRadius: '50%', background: 'var(--bg-paper)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                                                        {req.profileImage ? <img src={req.profileImage} alt={req.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <User size={18} />}
+                                                    </div>
+                                                    <div>
+                                                        <div style={{ fontWeight: 600, fontSize: '0.92rem' }}>{req.name}</div>
+                                                        <div style={{ fontSize: '0.78rem', color: 'var(--ink-muted)' }}>{req.specialization} · wants access to your records</div>
+                                                    </div>
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                    <button onClick={() => respondToRequest(req.doctor_uid, true)} className="btn-primary" style={{ width: 'auto', padding: '0.45rem 1rem', fontSize: '0.82rem' }}>Approve</button>
+                                                    <button onClick={() => respondToRequest(req.doctor_uid, false)} className="btn-outline" style={{ padding: '0.45rem 1rem', fontSize: '0.82rem' }}>Deny</button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
                             {fetchingDoctors ? (
                                 <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text-muted)' }}><span className="loader"></span> Loading doctors...</div>

@@ -306,15 +306,47 @@ def grant_patient_consent(req: PatientConsentRequest, uid: str = Depends(get_cur
 
 @router.post("/patient/revoke-consent")
 def revoke_patient_consent(req: PatientConsentRequest, uid: str = Depends(get_current_patient_uid)):
+    """Revoke access — deletes the row so it doesn't linger as a pending request."""
     supabase = get_supabase()
     try:
-        supabase.table("consents").upsert({
-            "patient_uid": uid, "doctor_uid": req.doctor_uid,
-            "granted": False, "timestamp": datetime.utcnow().isoformat(),
-        }).execute()
-        return {"message": "Consent revoked successfully."}
+        supabase.table("consents").delete().eq("patient_uid", uid).eq("doctor_uid", req.doctor_uid).execute()
+        return {"message": "Access revoked successfully."}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to revoke consent: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to revoke access: {exc}")
+
+
+@router.get("/patient/access-requests")
+def get_access_requests(uid: str = Depends(get_current_patient_uid)):
+    """List doctors who have REQUESTED access (granted=false) but aren't approved yet."""
+    supabase = get_supabase()
+    try:
+        rows = supabase.table("consents").select("doctor_uid, timestamp").eq("patient_uid", uid).eq("granted", False).execute()
+        requests = []
+        for r in (rows.data or []):
+            d = maybe_one(supabase.table("users").select("uid, email, document").eq("uid", r["doctor_uid"]))
+            doc = (d.data or {}).get("document") or {}
+            requests.append({
+                "doctor_uid":     r["doctor_uid"],
+                "name":           doc.get("name", "Unknown Doctor"),
+                "email":          (d.data or {}).get("email", ""),
+                "specialization": doc.get("specialization", "General Medicine"),
+                "profileImage":   doc.get("profileImage", ""),
+                "requested_at":   r.get("timestamp", ""),
+            })
+        return {"requests": requests}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch access requests: {exc}")
+
+
+@router.post("/patient/deny-request")
+def deny_access_request(req: PatientConsentRequest, uid: str = Depends(get_current_patient_uid)):
+    """Deny a pending access request — removes the row entirely."""
+    supabase = get_supabase()
+    try:
+        supabase.table("consents").delete().eq("patient_uid", uid).eq("doctor_uid", req.doctor_uid).execute()
+        return {"message": "Access request denied."}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to deny request: {exc}")
 
 
 @router.post("/patient/log-steps")
@@ -513,7 +545,28 @@ def lookup_patient_by_health_id(health_id: str, requester: dict = Depends(get_au
             has_assign  = assignment.data and assignment.data.get("status") == "active"
 
             if not has_consent and not has_assign:
-                raise HTTPException(status_code=403, detail="Access denied — patient consent required.")
+                # No access yet → record a PENDING access request (granted=false) the
+                # patient can approve, instead of hard-denying.
+                already_pending = consent.data is not None  # a row exists but granted=false
+                supabase.table("consents").upsert({
+                    "patient_uid": matched_uid,
+                    "doctor_uid":  requester_uid,
+                    "granted":     False,
+                    "timestamp":   datetime.utcnow().isoformat(),
+                }).execute()
+                return {
+                    "found": True,
+                    "access_requested": True,
+                    "already_pending": already_pending,
+                    "message": ("Access already requested — waiting for the patient to approve."
+                                if already_pending else
+                                "Access requested. The patient must approve before you can view their records."),
+                    "patient": {
+                        "uid": matched_uid,
+                        "name": matched_data.get("name", "Unknown"),
+                        "healthId": matched_data.get("healthId", ""),
+                    },
+                }
 
         reports_res = supabase.table("fhir_reports").select("document").eq("user_id", matched_uid).eq("collection_type", "reports").execute()
         rx_res      = supabase.table("fhir_prescriptions").select("document").eq("user_id", matched_uid).execute()
