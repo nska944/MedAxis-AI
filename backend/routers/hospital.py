@@ -2,8 +2,9 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
-from supabase_config import get_supabase, build_user_row, maybe_one
+from supabase_config import get_supabase, build_user_row, maybe_one, merge_user_doc
 from routers.auth_helpers import (
     get_current_hospital_uid,
     RoleAssignRequest,
@@ -14,6 +15,60 @@ from routers.auth_helpers import (
 )
 
 router = APIRouter()
+
+
+class AddExistingDoctorRequest(BaseModel):
+    email: str
+
+
+@router.post("/hospital/add-existing-doctor")
+def hospital_add_existing_doctor(req: AddExistingDoctorRequest, hospital_uid: str = Depends(get_current_hospital_uid)):
+    """
+    Affiliate an already-existing doctor account with THIS hospital by email.
+    Sets the doctor's hospital_id + hospitalUid so they appear in this hospital's
+    roster and can perform clinical actions.
+    """
+    supabase = get_supabase()
+    try:
+        hosp_res    = maybe_one(supabase.table("users").select("hospital_id").eq("uid", hospital_uid))
+        hospital_id = (hosp_res.data or {}).get("hospital_id", "")
+        if not hospital_id:
+            raise HTTPException(status_code=403, detail="Hospital account is incomplete (missing hospitalId). Contact your super admin.")
+
+        doc_res = maybe_one(supabase.table("users").select("uid, role, document, hospital_id").eq("email", req.email.strip().lower()))
+        if not doc_res.data:
+            # also try exact (non-lowercased) email in case it was stored mixed-case
+            doc_res = maybe_one(supabase.table("users").select("uid, role, document, hospital_id").eq("email", req.email.strip()))
+        if not doc_res.data:
+            raise HTTPException(status_code=404, detail=f"No account found with email {req.email}.")
+        if doc_res.data.get("role") != "doctor":
+            raise HTTPException(status_code=400, detail="That account exists but is not a doctor.")
+
+        doctor_uid    = doc_res.data["uid"]
+        existing_hosp = doc_res.data.get("hospital_id", "")
+        if existing_hosp and existing_hosp == hospital_id:
+            raise HTTPException(status_code=400, detail="That doctor is already affiliated with your hospital.")
+        if existing_hosp and existing_hosp != hospital_id:
+            raise HTTPException(status_code=400, detail=f"That doctor is already affiliated with another hospital ({existing_hosp}).")
+
+        merge_user_doc(supabase, doctor_uid, {"hospitalId": hospital_id, "hospitalUid": hospital_uid})
+
+        supabase.table("audit_logs").insert({
+            "action": "HOSPITAL_ADD_EXISTING_DOCTOR",
+            "document": {"hospital_uid": hospital_uid, "hospital_id": hospital_id, "doctor_uid": doctor_uid, "email": req.email},
+        }).execute()
+
+        doc = doc_res.data.get("document") or {}
+        return {
+            "success": True,
+            "doctor_uid": doctor_uid,
+            "name": doc.get("name", ""),
+            "message": "Doctor affiliated with your hospital successfully.",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to add doctor: {exc}")
 
 
 @router.post("/hospital/create-doctor")

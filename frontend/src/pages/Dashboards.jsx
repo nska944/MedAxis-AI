@@ -611,8 +611,65 @@ export const HospitalDashboard = () => {
     // We can also let the hospital perform unrestricted lookups if they want
     const [searchId, setSearchId] = useState('');
     const [searchResult, setSearchResult] = useState(null);
+    const [searchError, setSearchError] = useState('');
     const [profileImage, setProfileImage] = useState(null);
     const [profile, setProfile] = useState(null);
+
+    // Doctor management
+    const [createForm, setCreateForm] = useState({ name: '', email: '', password: '' });
+    const [createMsg, setCreateMsg] = useState(null);
+    const [createLoading, setCreateLoading] = useState(false);
+    const [existingEmail, setExistingEmail] = useState('');
+    const [existingMsg, setExistingMsg] = useState(null);
+    const [existingLoading, setExistingLoading] = useState(false);
+
+    const refreshDoctors = async () => {
+        try {
+            const token = await currentUser.getIdToken();
+            const res = await fetch(`${API_BASE_URL}/hospital/doctors`, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (res.ok) setDoctors((await res.json()).doctors || []);
+        } catch (_) {}
+    };
+
+    const handleCreateDoctor = async (e) => {
+        e.preventDefault();
+        setCreateLoading(true); setCreateMsg(null);
+        try {
+            const token = await currentUser.getIdToken();
+            const res = await fetch(`${API_BASE_URL}/hospital/create-doctor`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify(createForm),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Failed to create doctor');
+            setCreateMsg({ type: 'success', text: `Doctor created — ID ${data.doctorId}, Employee ${data.employeeId}.` });
+            setCreateForm({ name: '', email: '', password: '' });
+            await refreshDoctors();
+        } catch (err) {
+            setCreateMsg({ type: 'error', text: err.message });
+        } finally { setCreateLoading(false); }
+    };
+
+    const handleAddExisting = async (e) => {
+        e.preventDefault();
+        setExistingLoading(true); setExistingMsg(null);
+        try {
+            const token = await currentUser.getIdToken();
+            const res = await fetch(`${API_BASE_URL}/hospital/add-existing-doctor`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ email: existingEmail.trim() }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Failed to add doctor');
+            setExistingMsg({ type: 'success', text: data.message || 'Doctor added.' });
+            setExistingEmail('');
+            await refreshDoctors();
+        } catch (err) {
+            setExistingMsg({ type: 'error', text: err.message });
+        } finally { setExistingLoading(false); }
+    };
 
     useEffect(() => {
         const fetchProfile = async () => {
@@ -674,11 +731,12 @@ export const HospitalDashboard = () => {
     };
 
     const tabs = [
-        { id: 'overview', label: '📊 Overview' },
-        { id: 'doctors', label: '🩺 Our Doctors' },
-        { id: 'patients', label: '👥 Our Patients' },
-        { id: 'lookup', label: '🔍 Patient Lookup' },
-        { id: 'profile', label: '👤 Profile' }
+        { id: 'overview', label: 'Overview' },
+        { id: 'doctors', label: 'Our Doctors' },
+        { id: 'manage', label: 'Add Doctors' },
+        { id: 'patients', label: 'Our Patients' },
+        { id: 'lookup', label: 'Patient Lookup' },
+        { id: 'profile', label: 'Profile' }
     ];
 
     const cardStyle = {
@@ -777,6 +835,51 @@ export const HospitalDashboard = () => {
                                     </table>
                                 </div>
                             )}
+                        </div>
+                    )}
+
+                    {/* Add / Manage Doctors */}
+                    {activeTab === 'manage' && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+                            {/* Create new doctor */}
+                            <div className="glass-panel">
+                                <h3 style={{ fontSize: '1.1rem', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><User size={18} /> Create a New Doctor</h3>
+                                <p style={{ color: 'var(--text-muted)', fontSize: '0.84rem', marginBottom: '1.25rem' }}>Creates a brand-new doctor account, auto-affiliated with your hospital.</p>
+                                <form onSubmit={handleCreateDoctor}>
+                                    <div className="form-group">
+                                        <label className="form-label">Full Name</label>
+                                        <input className="form-input" value={createForm.name} onChange={e => setCreateForm(p => ({ ...p, name: e.target.value }))} required placeholder="Dr Jane Doe" />
+                                    </div>
+                                    <div className="form-group">
+                                        <label className="form-label">Email</label>
+                                        <input type="email" className="form-input" value={createForm.email} onChange={e => setCreateForm(p => ({ ...p, email: e.target.value }))} required placeholder="jane@hospital.com" />
+                                    </div>
+                                    <div className="form-group">
+                                        <label className="form-label">Temporary Password</label>
+                                        <input type="text" className="form-input" value={createForm.password} onChange={e => setCreateForm(p => ({ ...p, password: e.target.value }))} required minLength={6} placeholder="min 6 characters" />
+                                    </div>
+                                    <button type="submit" className="btn-primary" disabled={createLoading}>
+                                        {createLoading ? <span className="loader"></span> : 'Create Doctor'}
+                                    </button>
+                                    {createMsg && <div style={{ marginTop: '0.85rem', fontSize: '0.85rem', color: createMsg.type === 'success' ? 'var(--success)' : 'var(--danger)' }}>{createMsg.text}</div>}
+                                </form>
+                            </div>
+
+                            {/* Add existing doctor */}
+                            <div className="glass-panel">
+                                <h3 style={{ fontSize: '1.1rem', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Search size={18} /> Add an Existing Doctor</h3>
+                                <p style={{ color: 'var(--text-muted)', fontSize: '0.84rem', marginBottom: '1.25rem' }}>Affiliate a doctor who already has an account (created by a super admin or another flow) with your hospital by their email.</p>
+                                <form onSubmit={handleAddExisting}>
+                                    <div className="form-group">
+                                        <label className="form-label">Doctor's Email</label>
+                                        <input type="email" className="form-input" value={existingEmail} onChange={e => setExistingEmail(e.target.value)} required placeholder="existing.doctor@example.com" />
+                                    </div>
+                                    <button type="submit" className="btn-primary" disabled={existingLoading}>
+                                        {existingLoading ? <span className="loader"></span> : 'Affiliate Doctor'}
+                                    </button>
+                                    {existingMsg && <div style={{ marginTop: '0.85rem', fontSize: '0.85rem', color: existingMsg.type === 'success' ? 'var(--success)' : 'var(--danger)' }}>{existingMsg.text}</div>}
+                                </form>
+                            </div>
                         </div>
                     )}
 
