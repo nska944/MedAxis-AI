@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from supabase_config import get_supabase, maybe_one
 from routers.auth_helpers import (
     get_current_doctor_uid,
+    get_authenticated_user_info,
     DoctorCommentRequest,
     PrescriptionCommentRequest,
     AlertResolveRequest,
@@ -14,6 +15,17 @@ from routers.auth_helpers import (
 )
 
 router = APIRouter()
+
+
+def get_doctor_uid_any(info: dict = Depends(get_authenticated_user_info)) -> str:
+    """
+    Like get_current_doctor_uid but does NOT require hospital affiliation.
+    Used for actions on the doctor's OWN account (e.g. editing their profile),
+    which shouldn't be blocked just because they're not yet assigned a hospital.
+    """
+    if info.get("role") != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can perform this action.")
+    return info["uid"]
 
 
 def _assert_doctor_role(supabase, uid: str):
@@ -158,7 +170,7 @@ def add_prescription(payload: PrescriptionRequest, doctor_uid: str = Depends(get
 
 
 @router.put("/doctor/profile")
-def update_doctor_profile(payload: DoctorProfileUpdateRequest, doctor_uid: str = Depends(get_current_doctor_uid)):
+def update_doctor_profile(payload: DoctorProfileUpdateRequest, doctor_uid: str = Depends(get_doctor_uid_any)):
     supabase = get_supabase()
     try:
         updates = {k: v for k, v in payload.dict().items() if v is not None}

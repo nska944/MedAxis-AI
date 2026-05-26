@@ -165,7 +165,10 @@ const SuperAdminDashboard = () => {
         if (!searchId.trim()) return;
         setSearchError(''); setSearchResult(null);
         try {
-            const res = await fetch(`${API_BASE_URL}/patient/lookup?health_id=${searchId.trim()}`);
+            const token = await currentUser.getIdToken();
+            const res = await fetch(`${API_BASE_URL}/patient/lookup?health_id=${encodeURIComponent(searchId.trim())}`, {
+                headers: { 'Authorization': `Bearer ${token}` },
+            });
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || 'Patient not found');
             setSearchResult(data);
